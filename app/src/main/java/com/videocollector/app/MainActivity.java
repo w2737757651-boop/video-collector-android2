@@ -37,6 +37,8 @@ public class MainActivity extends Activity {
     private DownloadManager downloadManager;
     private Handler handler;
     private long currentDownloadId=-1L;
+    private long lastBytes=0L;
+    private long lastSampleTime=0L;
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -80,7 +82,7 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(true);
-        s.setUserAgentString(s.getUserAgentString()+" VideoCollectorApp/2.0");
+        s.setUserAgentString(s.getUserAgentString()+" VideoCollectorApp/3.4");
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);
@@ -94,8 +96,8 @@ public class MainActivity extends Activity {
 
     public class AndroidDownloader{
         @JavascriptInterface
-        public void download(final String url,final String filename){
-            runOnUiThread(() -> startDownload(url,filename));
+        public void download(final String url,final String filename,final String referer){
+            runOnUiThread(() -> startDownload(url,filename,referer));
         }
     }
 
@@ -119,7 +121,7 @@ public class MainActivity extends Activity {
     }
 
 
-    private void startDownload(String url,String filename){
+    private void startDownload(String url,String filename,String referer){
         if(Build.VERSION.SDK_INT<=Build.VERSION_CODES.P &&
            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)!=PackageManager.PERMISSION_GRANTED){
             requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},REQ_STORAGE);
@@ -135,10 +137,15 @@ public class MainActivity extends Activity {
             String cookie=CookieManager.getInstance().getCookie(url);
             if(cookie!=null) req.addRequestHeader("Cookie",cookie);
             req.addRequestHeader("User-Agent",webView.getSettings().getUserAgentString());
+            if(referer!=null && !referer.trim().isEmpty()){
+                req.addRequestHeader("Referer",referer);
+            }
             req.setTitle(filename);
             req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,filename);
 
             currentDownloadId=downloadManager.enqueue(req);
+            lastBytes=0L;
+            lastSampleTime=System.currentTimeMillis();
             downloadPanel.setVisibility(View.VISIBLE);
             downloadProgress.setIndeterminate(false);
             downloadProgress.setProgress(0);
@@ -186,15 +193,30 @@ public class MainActivity extends Activity {
                     return;
                 }
 
+                long now=System.currentTimeMillis();
+                long deltaMs=Math.max(1L,now-lastSampleTime);
+                long deltaBytes=Math.max(0L,done-lastBytes);
+                double speedMB=deltaBytes/1024.0/1024.0/(deltaMs/1000.0);
+                lastBytes=done;
+                lastSampleTime=now;
+
+                double doneMB=done/1024.0/1024.0;
+
                 if(total>0){
                     int percent=(int)(done*100L/total);
+                    double totalMB=total/1024.0/1024.0;
                     downloadProgress.setIndeterminate(false);
                     downloadProgress.setProgress(percent);
-                    downloadText.setText("正在下载："+filename+"  "+percent+"%");
+                    downloadText.setText(String.format(
+                        "正在下载：%s  %d%%  %.1f / %.1f MB  %.2f MB/s",
+                        filename,percent,doneMB,totalMB,speedMB
+                    ));
                 }else{
                     downloadProgress.setIndeterminate(true);
-                    double mb=done/1024.0/1024.0;
-                    downloadText.setText(String.format("正在下载：%s  %.1f MB",filename,mb));
+                    downloadText.setText(String.format(
+                        "正在下载：%s  %.1f MB  %.2f MB/s",
+                        filename,doneMB,speedMB
+                    ));
                 }
 
                 poll(id,filename);
@@ -203,7 +225,7 @@ public class MainActivity extends Activity {
             }finally{
                 if(c!=null)c.close();
             }
-        },500);
+        },250);
     }
 
     @Override
