@@ -34,6 +34,16 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.net.URI;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.util.Iterator;
+import java.nio.charset.StandardCharsets;
+import java.net.URLDecoder;
+import java.net.URL;
+import java.net.HttpURLConnection;
+import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.io.BufferedReader;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -148,7 +158,7 @@ public class MainActivity extends Activity {
         s.setAllowContentAccess(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         s.setUserAgentString(
-            s.getUserAgentString() + " VideoCollectorApp/5.0"
+            s.getUserAgentString() + " VideoCollectorApp/5.3"
         );
 
         CookieManager.getInstance().setAcceptCookie(true);
@@ -189,7 +199,7 @@ public class MainActivity extends Activity {
         // Keep a normal Android Chrome UA. Do not impersonate a logged-in app.
         String ua = s.getUserAgentString();
         s.setUserAgentString(
-            ua.replace("; wv", "") + " VideoCollectorLocalParser/5.0"
+            ua.replace("; wv", "") + " VideoCollectorLocalParser/5.3"
         );
 
         CookieManager.getInstance().setAcceptCookie(true);
@@ -222,18 +232,40 @@ public class MainActivity extends Activity {
                         "本地页面已打开，正在读取公开媒体资源…"
                     );
 
+                    String current =
+                        url == null
+                            ? ""
+                            : url.toLowerCase(Locale.US);
+
+                    boolean isXhs =
+                        current.contains("xiaohongshu.com")
+                        || current.contains("xhslink.");
+
+                    if (isXhs) {
+                        handler.postDelayed(
+                            () -> scrapeXhsStructured(generation),
+                            700
+                        );
+
+                        handler.postDelayed(
+                            () -> scrapeXhsStructured(generation),
+                            1800
+                        );
+
+                        handler.postDelayed(
+                            () -> scrapeXhsStructured(generation),
+                            3500
+                        );
+                    }
+
+                    // Generic network/page scan remains fallback only.
                     handler.postDelayed(
                         () -> scrapeParserPage(generation, 1),
-                        900
+                        2200
                     );
 
                     handler.postDelayed(
                         () -> scrapeParserPage(generation, 2),
-                        2600
-                    );
-
-                    handler.postDelayed(
-                        () -> scrapeParserPage(generation, 3),
                         5200
                     );
                 }
@@ -304,6 +336,800 @@ public class MainActivity extends Activity {
     }
 
 
+
+    private static final String DOUYIN_IPHONE_UA =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+        + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+        + "Mobile/15E148 Safari/604.1";
+
+
+    private void parseDouyinHttpFirst(
+        final String sourceUrl,
+        final int generation
+    ) {
+        new Thread(
+            () -> {
+                try {
+                    sendLocalStatus(
+                        "抖音：正在手机本地解析分享链接…"
+                    );
+
+                    String finalUrl =
+                        httpResolveFinalUrl(
+                            sourceUrl,
+                            DOUYIN_IPHONE_UA
+                        );
+
+                    String awemeId =
+                        extractDouyinAwemeId(
+                            finalUrl
+                        );
+
+                    if (awemeId == null) {
+                        awemeId =
+                            extractDouyinAwemeId(
+                                sourceUrl
+                            );
+                    }
+
+                    if (awemeId == null) {
+                        throw new Exception(
+                            "没有从抖音分享链接中识别到作品 ID"
+                        );
+                    }
+
+                    sendLocalStatus(
+                        "抖音：已识别作品，正在读取公开分享页数据…"
+                    );
+
+                    String shareUrl =
+                        "https://www.iesdouyin.com/share/video/"
+                        + awemeId
+                        + "/";
+
+                    String html =
+                        httpGetText(
+                            shareUrl,
+                            DOUYIN_IPHONE_UA,
+                            "https://www.douyin.com/"
+                        );
+
+                    String routerJson =
+                        extractBalancedJsonAfter(
+                            html,
+                            "window._ROUTER_DATA"
+                        );
+
+                    if (routerJson == null) {
+                        routerJson =
+                            extractBalancedJsonAfter(
+                                html,
+                                "_ROUTER_DATA"
+                            );
+                    }
+
+                    if (routerJson == null) {
+                        throw new Exception(
+                            "抖音公开分享页没有返回 _ROUTER_DATA"
+                        );
+                    }
+
+                    JSONObject root =
+                        new JSONObject(routerJson);
+
+                    JSONObject item =
+                        findDouyinItem(root);
+
+                    if (item == null) {
+                        throw new Exception(
+                            "抖音页面数据里没有找到作品详情"
+                        );
+                    }
+
+                    JSONObject result =
+                        buildDouyinResult(
+                            item,
+                            sourceUrl,
+                            shareUrl
+                        );
+
+                    if (
+                        result.optJSONArray("videos") == null
+                        || result.optJSONArray("videos").length() == 0
+                    ) {
+                        throw new Exception(
+                            "该作品没有找到可直接访问的视频地址"
+                        );
+                    }
+
+                    handler.post(
+                        () -> {
+                            if (
+                                generation != parseGeneration
+                                || localResultDelivered
+                            ) {
+                                return;
+                            }
+
+                            localResultDelivered = true;
+                            deliverLocalResult(result);
+                        }
+                    );
+
+                } catch (Exception primaryError) {
+
+                    // WebView is fallback only.
+                    handler.post(
+                        () -> {
+                            if (
+                                generation != parseGeneration
+                                || localResultDelivered
+                            ) {
+                                return;
+                            }
+
+                            sendLocalStatus(
+                                "抖音直接解析未取得完整数据，"
+                                + "正在使用手机网页兜底…"
+                            );
+
+                            parserWebView.stopLoading();
+                            parserWebView.loadUrl(
+                                sourceUrl
+                            );
+                        }
+                    );
+                }
+            }
+        ).start();
+    }
+
+
+    private String httpResolveFinalUrl(
+        String sourceUrl,
+        String userAgent
+    ) throws Exception {
+        String current = sourceUrl;
+
+        for (int i = 0; i < 8; i++) {
+            HttpURLConnection c =
+                (HttpURLConnection)
+                    new URL(current)
+                        .openConnection();
+
+            c.setInstanceFollowRedirects(false);
+            c.setConnectTimeout(4500);
+            c.setReadTimeout(4500);
+            c.setRequestProperty(
+                "User-Agent",
+                userAgent
+            );
+            c.setRequestProperty(
+                "Accept",
+                "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"
+            );
+
+            int status =
+                c.getResponseCode();
+
+            if (
+                status >= 300
+                && status < 400
+            ) {
+                String location =
+                    c.getHeaderField(
+                        "Location"
+                    );
+
+                c.disconnect();
+
+                if (
+                    location == null
+                    || location.isEmpty()
+                ) {
+                    break;
+                }
+
+                current =
+                    new URL(
+                        new URL(current),
+                        location
+                    ).toString();
+
+                continue;
+            }
+
+            String resolved =
+                c.getURL().toString();
+
+            c.disconnect();
+            return resolved;
+        }
+
+        return current;
+    }
+
+
+    private String httpGetText(
+        String url,
+        String userAgent,
+        String referer
+    ) throws Exception {
+        HttpURLConnection c =
+            (HttpURLConnection)
+                new URL(url)
+                    .openConnection();
+
+        c.setInstanceFollowRedirects(true);
+        c.setConnectTimeout(6000);
+        c.setReadTimeout(6000);
+        c.setRequestProperty(
+            "User-Agent",
+            userAgent
+        );
+        c.setRequestProperty(
+            "Accept",
+            "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"
+        );
+        c.setRequestProperty(
+            "Accept-Language",
+            "zh-CN,zh;q=0.9,en;q=0.8"
+        );
+
+        if (
+            referer != null
+            && !referer.isEmpty()
+        ) {
+            c.setRequestProperty(
+                "Referer",
+                referer
+            );
+        }
+
+        int status =
+            c.getResponseCode();
+
+        InputStream stream =
+            status >= 400
+                ? c.getErrorStream()
+                : c.getInputStream();
+
+        if (stream == null) {
+            c.disconnect();
+            throw new Exception(
+                "HTTP "
+                + status
+                + " 无响应内容"
+            );
+        }
+
+        BufferedReader reader =
+            new BufferedReader(
+                new InputStreamReader(
+                    stream,
+                    StandardCharsets.UTF_8
+                )
+            );
+
+        StringBuilder sb =
+            new StringBuilder();
+
+        String line;
+
+        while (
+            (line = reader.readLine())
+                != null
+        ) {
+            sb.append(line);
+        }
+
+        reader.close();
+        c.disconnect();
+
+        if (status >= 400) {
+            throw new Exception(
+                "HTTP " + status
+            );
+        }
+
+        return sb.toString();
+    }
+
+
+    private String extractDouyinAwemeId(
+        String url
+    ) {
+        if (url == null) {
+            return null;
+        }
+
+        String[] patterns = new String[]{
+            "/video/(\\d+)",
+            "/share/video/(\\d+)",
+            "[?&]modal_id=(\\d+)",
+            "[?&]aweme_id=(\\d+)"
+        };
+
+        for (String p : patterns) {
+            Matcher m =
+                Pattern.compile(p)
+                    .matcher(url);
+
+            if (m.find()) {
+                return m.group(1);
+            }
+        }
+
+        return null;
+    }
+
+
+    private String extractBalancedJsonAfter(
+        String text,
+        String marker
+    ) {
+        if (
+            text == null
+            || marker == null
+        ) {
+            return null;
+        }
+
+        int markerIndex =
+            text.indexOf(marker);
+
+        if (markerIndex < 0) {
+            return null;
+        }
+
+        int start =
+            text.indexOf(
+                '{',
+                markerIndex
+            );
+
+        if (start < 0) {
+            return null;
+        }
+
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (
+            int i = start;
+            i < text.length();
+            i++
+        ) {
+            char ch =
+                text.charAt(i);
+
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (ch == '\\') {
+                    escaped = true;
+                } else if (ch == '"') {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '"') {
+                inString = true;
+                continue;
+            }
+
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+
+                if (depth == 0) {
+                    return text.substring(
+                        start,
+                        i + 1
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
+
+    private JSONObject findDouyinItem(
+        Object node
+    ) {
+        if (node == null) {
+            return null;
+        }
+
+        if (node instanceof JSONObject) {
+            JSONObject obj =
+                (JSONObject) node;
+
+            if (
+                obj.has("video")
+                && (
+                    obj.has("aweme_id")
+                    || obj.has("desc")
+                    || obj.has("author")
+                )
+            ) {
+                return obj;
+            }
+
+            Iterator<String> keys =
+                obj.keys();
+
+            while (keys.hasNext()) {
+                String key =
+                    keys.next();
+
+                Object child =
+                    obj.opt(key);
+
+                JSONObject found =
+                    findDouyinItem(child);
+
+                if (found != null) {
+                    return found;
+                }
+            }
+
+        } else if (
+            node instanceof JSONArray
+        ) {
+            JSONArray arr =
+                (JSONArray) node;
+
+            for (
+                int i = 0;
+                i < arr.length();
+                i++
+            ) {
+                JSONObject found =
+                    findDouyinItem(
+                        arr.opt(i)
+                    );
+
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+
+        return null;
+    }
+
+
+    private String firstUrl(
+        Object value
+    ) {
+        if (value == null) {
+            return null;
+        }
+
+        if (value instanceof String) {
+            String s =
+                (String) value;
+
+            return s.startsWith("http")
+                ? s
+                : null;
+        }
+
+        if (value instanceof JSONArray) {
+            JSONArray arr =
+                (JSONArray) value;
+
+            for (
+                int i = 0;
+                i < arr.length();
+                i++
+            ) {
+                String s =
+                    firstUrl(
+                        arr.opt(i)
+                    );
+
+                if (s != null) {
+                    return s;
+                }
+            }
+
+            return null;
+        }
+
+        if (value instanceof JSONObject) {
+            JSONObject obj =
+                (JSONObject) value;
+
+            JSONArray urls =
+                obj.optJSONArray(
+                    "url_list"
+                );
+
+            if (urls == null) {
+                urls =
+                    obj.optJSONArray(
+                        "urlList"
+                    );
+            }
+
+            if (urls != null) {
+                return firstUrl(urls);
+            }
+
+            String[] candidateKeys =
+                new String[]{
+                    "url",
+                    "src",
+                    "play_addr",
+                    "playAddr",
+                    "download_addr"
+                };
+
+            for (String key : candidateKeys) {
+                if (obj.has(key)) {
+                    String s =
+                        firstUrl(
+                            obj.opt(key)
+                        );
+
+                    if (s != null) {
+                        return s;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+
+    private void addUrlList(
+        JSONArray out,
+        Object source,
+        String quality,
+        String ext
+    ) throws Exception {
+        if (source == null) {
+            return;
+        }
+
+        JSONArray urls = null;
+
+        if (source instanceof JSONObject) {
+            JSONObject obj =
+                (JSONObject) source;
+
+            urls =
+                obj.optJSONArray(
+                    "url_list"
+                );
+
+            if (urls == null) {
+                urls =
+                    obj.optJSONArray(
+                        "urlList"
+                    );
+            }
+
+        } else if (
+            source instanceof JSONArray
+        ) {
+            urls =
+                (JSONArray) source;
+        }
+
+        if (urls == null) {
+            String single =
+                firstUrl(source);
+
+            if (single != null) {
+                JSONObject item =
+                    new JSONObject();
+
+                item.put(
+                    "quality",
+                    quality
+                );
+
+                item.put(
+                    "url",
+                    single
+                );
+
+                item.put(
+                    "ext",
+                    ext
+                );
+
+                out.put(item);
+            }
+
+            return;
+        }
+
+        Set<String> seen =
+            new CopyOnWriteArraySet<>();
+
+        for (
+            int i = 0;
+            i < urls.length();
+            i++
+        ) {
+            String u =
+                urls.optString(
+                    i,
+                    ""
+                );
+
+            if (
+                !u.startsWith("http")
+                || seen.contains(u)
+            ) {
+                continue;
+            }
+
+            seen.add(u);
+
+            JSONObject item =
+                new JSONObject();
+
+            item.put(
+                "quality",
+                quality
+            );
+
+            item.put(
+                "url",
+                u
+            );
+
+            item.put(
+                "ext",
+                ext
+            );
+
+            out.put(item);
+        }
+    }
+
+
+    private JSONObject buildDouyinResult(
+        JSONObject item,
+        String sourceUrl,
+        String resolvedUrl
+    ) throws Exception {
+        JSONObject video =
+            item.optJSONObject(
+                "video"
+            );
+
+        JSONObject author =
+            item.optJSONObject(
+                "author"
+            );
+
+        JSONObject music =
+            item.optJSONObject(
+                "music"
+            );
+
+        JSONArray videos =
+            new JSONArray();
+
+        if (video != null) {
+            Object play =
+                video.opt(
+                    "play_addr"
+                );
+
+            if (play == null) {
+                play =
+                    video.opt(
+                        "playAddr"
+                    );
+            }
+
+            if (play == null) {
+                play =
+                    video.opt(
+                        "download_addr"
+                    );
+            }
+
+            addUrlList(
+                videos,
+                play,
+                "原视频",
+                "mp4"
+            );
+        }
+
+        JSONArray audios =
+            new JSONArray();
+
+        if (music != null) {
+            Object play =
+                music.opt(
+                    "play_url"
+                );
+
+            if (play == null) {
+                play =
+                    music.opt(
+                        "playUrl"
+                    );
+            }
+
+            addUrlList(
+                audios,
+                play,
+                "原声音频",
+                "mp3"
+            );
+        }
+
+        JSONObject result =
+            new JSONObject();
+
+        result.put(
+            "success",
+            true
+        );
+
+        result.put(
+            "platform",
+            "Douyin / 本地直解析"
+        );
+
+        result.put(
+            "title",
+            item.optString(
+                "desc",
+                "抖音视频"
+            )
+        );
+
+        result.put(
+            "author",
+            author != null
+                ? author.optString(
+                    "nickname",
+                    ""
+                )
+                : ""
+        );
+
+        result.put(
+            "source_url",
+            sourceUrl
+        );
+
+        result.put(
+            "resolved_url",
+            resolvedUrl
+        );
+
+        result.put(
+            "videos",
+            videos
+        );
+
+        result.put(
+            "audios",
+            audios
+        );
+
+        return result;
+    }
+
+
     public class AndroidLocalParser {
 
         @JavascriptInterface
@@ -351,25 +1177,33 @@ public class MainActivity extends Activity {
         parserWebView.stopLoading();
         parserWebView.loadUrl("about:blank");
 
-        sendLocalStatus(
-            host.contains("douyin")
-                ? "抖音：正在手机本地打开公开分享页…"
-                : "小红书：正在手机本地打开公开分享页…"
-        );
-
         final int generation = parseGeneration;
 
-        handler.postDelayed(
-            () -> {
-                if (
-                    generation == parseGeneration
-                    && !localResultDelivered
-                ) {
-                    parserWebView.loadUrl(url);
-                }
-            },
-            120
-        );
+        if (
+            host.contains("douyin.com")
+            || host.contains("iesdouyin.com")
+        ) {
+            parseDouyinHttpFirst(
+                url,
+                generation
+            );
+        } else {
+            sendLocalStatus(
+                "小红书：正在手机本地打开公开分享页…"
+            );
+
+            handler.postDelayed(
+                () -> {
+                    if (
+                        generation == parseGeneration
+                        && !localResultDelivered
+                    ) {
+                        parserWebView.loadUrl(url);
+                    }
+                },
+                120
+            );
+        }
 
         // Hard local timeout. This does not loop forever.
         handler.postDelayed(
@@ -386,11 +1220,20 @@ public class MainActivity extends Activity {
                                 generation == parseGeneration
                                 && !localResultDelivered
                             ) {
+                                String h=getHost(currentParseUrl);
+                                boolean isDouyin=
+                                    h!=null
+                                    && (
+                                        h.contains("douyin.com")
+                                        || h.contains("iesdouyin.com")
+                                    );
+
                                 deliverLocalError(
-                                    "手机本地已打开该公开分享页，"
-                                    + "但没有捕获到可直接访问的视频/音频资源。"
-                                    + "如果页面要求登录、验证码或平台限制网页播放，"
-                                    + "本工具不会绕过。"
+                                    isDouyin
+                                        ? "抖音本地直解析和网页兜底都没有取得公开视频/音频地址。"
+                                          + "请重新复制一条最新分享链接后再试。"
+                                        : "小红书本地已打开公开分享页，但页面没有暴露可直接访问的视频/音频资源。"
+                                          + "请确保使用小红书“分享→复制链接”得到的完整最新分享链接。"
                                 );
                             }
                         },
@@ -400,6 +1243,417 @@ public class MainActivity extends Activity {
             },
             11000
         );
+    }
+
+
+
+    private void scrapeXhsStructured(
+        final int generation
+    ) {
+        if (
+            generation != parseGeneration
+            || localResultDelivered
+        ) {
+            return;
+        }
+
+        String javascript =
+            "(function(){"
+            + "try{"
+            + " const s=window.__INITIAL_STATE__;"
+            + " if(!s)return JSON.stringify({ok:false,reason:'no_state'});"
+            + " const m=s.note&&s.note.noteDetailMap;"
+            + " if(!m)return JSON.stringify({ok:false,reason:'no_note_map'});"
+            + " const keys=Object.keys(m);"
+            + " if(!keys.length)return JSON.stringify({ok:false,reason:'empty_note_map'});"
+            + " const wrap=m[keys[0]]||{};"
+            + " const n=wrap.note||wrap;"
+            + " if(!n)return JSON.stringify({ok:false,reason:'no_note'});"
+            + " if(n.type&&n.type!=='video')return JSON.stringify({ok:false,reason:'not_video',type:n.type,title:n.title||n.desc||''});"
+            + " const media=n.video&&n.video.media;"
+            + " const stream=media&&media.stream;"
+            + " const h264=stream&&stream.h264;"
+            + " if(!Array.isArray(h264)||!h264.length)return JSON.stringify({ok:false,reason:'no_h264'});"
+            + " let best=h264[0];"
+            + " for(const x of h264){"
+            + "   if(!x)continue;"
+            + "   const a=Number(x.size||0),b=Number(best&&best.size||0);"
+            + "   if(a>b)best=x;"
+            + " }"
+            + " const u=(best&&best.masterUrl)||'';"
+            + " if(!/^https?:\\/\\//i.test(u))return JSON.stringify({ok:false,reason:'no_master_url'});"
+            + " return JSON.stringify({"
+            + "   ok:true,"
+            + "   title:n.title||n.desc||'小红书视频',"
+            + "   author:(n.user&&n.user.nickname)||'',"
+            + "   url:u,"
+            + "   width:Number(best.width||0),"
+            + "   height:Number(best.height||0),"
+            + "   size:Number(best.size||0),"
+            + "   duration:Number(best.duration||0),"
+            + "   page:location.href"
+            + " });"
+            + "}catch(e){return JSON.stringify({ok:false,reason:'exception',message:String(e)});}"
+            + "})()";
+
+        parserWebView.evaluateJavascript(
+            javascript,
+            encodedValue -> {
+                if (
+                    generation != parseGeneration
+                    || localResultDelivered
+                ) {
+                    return;
+                }
+
+                try {
+                    String jsonText =
+                        decodeEvaluateJavascriptString(
+                            encodedValue
+                        );
+
+                    if (
+                        jsonText == null
+                        || jsonText.isEmpty()
+                    ) {
+                        return;
+                    }
+
+                    JSONObject data =
+                        new JSONObject(
+                            jsonText
+                        );
+
+                    if (!data.optBoolean("ok")) {
+                        String reason =
+                            data.optString(
+                                "reason",
+                                ""
+                            );
+
+                        if (
+                            "not_video".equals(reason)
+                        ) {
+                            deliverLocalError(
+                                "这条小红书笔记不是视频作品，当前类型："
+                                + data.optString(
+                                    "type",
+                                    "未知"
+                                )
+                            );
+
+                            localResultDelivered = true;
+                        }
+
+                        return;
+                    }
+
+                    String mediaUrl =
+                        data.optString(
+                            "url",
+                            ""
+                        );
+
+                    if (
+                        mediaUrl.isEmpty()
+                    ) {
+                        return;
+                    }
+
+                    validateVideoUrlAsync(
+                        mediaUrl,
+                        data.optString(
+                            "page",
+                            currentParseUrl
+                        ),
+                        ok -> {
+                            if (
+                                generation
+                                    != parseGeneration
+                                || localResultDelivered
+                            ) {
+                                return;
+                            }
+
+                            if (!ok) {
+                                sendLocalStatus(
+                                    "已找到小红书 H.264 视频地址，"
+                                    + "但媒体校验失败，正在继续检查页面…"
+                                );
+
+                                return;
+                            }
+
+                            try {
+                                JSONObject result =
+                                    new JSONObject();
+
+                                result.put(
+                                    "success",
+                                    true
+                                );
+
+                                result.put(
+                                    "platform",
+                                    "XiaoHongShu / 本地 H.264"
+                                );
+
+                                result.put(
+                                    "title",
+                                    data.optString(
+                                        "title",
+                                        "小红书视频"
+                                    )
+                                );
+
+                                result.put(
+                                    "author",
+                                    data.optString(
+                                        "author",
+                                        ""
+                                    )
+                                );
+
+                                result.put(
+                                    "source_url",
+                                    currentParseUrl
+                                );
+
+                                result.put(
+                                    "resolved_url",
+                                    data.optString(
+                                        "page",
+                                        currentParseUrl
+                                    )
+                                );
+
+                                JSONArray videos =
+                                    new JSONArray();
+
+                                JSONObject item =
+                                    new JSONObject();
+
+                                item.put(
+                                    "quality",
+                                    (
+                                        data.optInt(
+                                            "height",
+                                            0
+                                        ) > 0
+                                    )
+                                        ? data.optInt(
+                                            "height",
+                                            0
+                                        )
+                                            + "p H.264"
+                                        : "H.264"
+                                );
+
+                                item.put(
+                                    "url",
+                                    mediaUrl
+                                );
+
+                                item.put(
+                                    "ext",
+                                    "mp4"
+                                );
+
+                                item.put(
+                                    "width",
+                                    data.optInt(
+                                        "width",
+                                        0
+                                    )
+                                );
+
+                                item.put(
+                                    "height",
+                                    data.optInt(
+                                        "height",
+                                        0
+                                    )
+                                );
+
+                                videos.put(item);
+
+                                result.put(
+                                    "videos",
+                                    videos
+                                );
+
+                                result.put(
+                                    "audios",
+                                    new JSONArray()
+                                );
+
+                                localResultDelivered = true;
+                                deliverLocalResult(
+                                    result
+                                );
+
+                            } catch (Exception e) {
+                                deliverLocalError(
+                                    "小红书视频结果构建失败："
+                                    + e.getMessage()
+                                );
+                            }
+                        }
+                    );
+
+                } catch (Exception ignored) {
+                }
+            }
+        );
+    }
+
+
+    private interface BoolCallback {
+        void onResult(boolean value);
+    }
+
+
+    private void validateVideoUrlAsync(
+        final String url,
+        final String referer,
+        final BoolCallback callback
+    ) {
+        new Thread(
+            () -> {
+                boolean valid = false;
+                HttpURLConnection c = null;
+
+                try {
+                    c =
+                        (HttpURLConnection)
+                            new URL(url)
+                                .openConnection();
+
+                    c.setInstanceFollowRedirects(
+                        true
+                    );
+
+                    c.setConnectTimeout(
+                        5000
+                    );
+
+                    c.setReadTimeout(
+                        5000
+                    );
+
+                    c.setRequestProperty(
+                        "User-Agent",
+                        parserWebView
+                            .getSettings()
+                            .getUserAgentString()
+                    );
+
+                    if (
+                        referer != null
+                        && !referer.isEmpty()
+                    ) {
+                        c.setRequestProperty(
+                            "Referer",
+                            referer
+                        );
+                    }
+
+                    c.setRequestProperty(
+                        "Range",
+                        "bytes=0-1023"
+                    );
+
+                    int status =
+                        c.getResponseCode();
+
+                    String type =
+                        c.getContentType();
+
+                    InputStream in =
+                        (
+                            status >= 200
+                            && status < 400
+                        )
+                            ? c.getInputStream()
+                            : null;
+
+                    byte[] head =
+                        new byte[32];
+
+                    int n =
+                        in != null
+                            ? in.read(head)
+                            : -1;
+
+                    if (in != null) {
+                        in.close();
+                    }
+
+                    boolean typeLooksVideo =
+                        type != null
+                        && (
+                            type.toLowerCase(
+                                Locale.US
+                            ).startsWith(
+                                "video/"
+                            )
+                            || type.toLowerCase(
+                                Locale.US
+                            ).contains(
+                                "octet-stream"
+                            )
+                        );
+
+                    boolean hasFtyp = false;
+
+                    if (n >= 8) {
+                        String prefix =
+                            new String(
+                                head,
+                                0,
+                                Math.min(
+                                    n,
+                                    16
+                                ),
+                                StandardCharsets.ISO_8859_1
+                            );
+
+                        hasFtyp =
+                            prefix.contains(
+                                "ftyp"
+                            );
+                    }
+
+                    valid =
+                        (
+                            status == 200
+                            || status == 206
+                        )
+                        && (
+                            typeLooksVideo
+                            || hasFtyp
+                        );
+
+                } catch (Exception ignored) {
+                    valid = false;
+
+                } finally {
+                    if (c != null) {
+                        c.disconnect();
+                    }
+                }
+
+                final boolean result =
+                    valid;
+
+                handler.post(
+                    () ->
+                        callback.onResult(
+                            result
+                        )
+                );
+            }
+        ).start();
     }
 
 
@@ -543,9 +1797,7 @@ public class MainActivity extends Activity {
                     item.put("url", u);
                     item.put(
                         "ext",
-                        u.toLowerCase(Locale.US).contains(".m3u8")
-                            ? "m3u8"
-                            : "mp4"
+                        "mp4"
                     );
                     videos.put(item);
                 }
@@ -799,6 +2051,54 @@ public class MainActivity extends Activity {
 
 
     private void startDownload(
+        String url,
+        String filename,
+        String referer
+    ) {
+        String lower =
+            filename == null
+                ? ""
+                : filename.toLowerCase(Locale.US);
+
+        if (
+            lower.endsWith(".mp4")
+            || lower.endsWith(".webm")
+            || lower.endsWith(".mov")
+        ) {
+            validateVideoUrlAsync(
+                url,
+                referer,
+                ok -> {
+                    if (!ok) {
+                        Toast.makeText(
+                            MainActivity.this,
+                            "下载地址不是有效视频，已阻止保存，避免生成 0 秒白屏文件。",
+                            Toast.LENGTH_LONG
+                        ).show();
+
+                        return;
+                    }
+
+                    enqueueDownload(
+                        url,
+                        filename,
+                        referer
+                    );
+                }
+            );
+
+            return;
+        }
+
+        enqueueDownload(
+            url,
+            filename,
+            referer
+        );
+    }
+
+
+    private void enqueueDownload(
         String url,
         String filename,
         String referer
