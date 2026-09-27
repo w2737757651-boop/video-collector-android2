@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#101317">
-<title>Video Collector V5</title>
+<title>Video Collector V6</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#101317;color:#f5f7fa;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
-.wrap{max-width:760px;margin:auto;padding:22px 16px 90px}
-h1{font-size:32px;margin:0 0 8px}
+.wrap{max-width:760px;margin:auto;padding:22px 16px 100px}
+h1{font-size:34px;margin:0 0 8px}
 .sub{color:#9aa4ae;line-height:1.7;margin-bottom:18px}
 .card{background:#181d23;border:1px solid #2a333c;border-radius:18px;padding:16px;margin-bottom:14px}
 textarea{width:100%;height:160px;border:1px solid #36414c;border-radius:14px;background:#0f1317;color:#fff;padding:14px;font-size:16px;resize:vertical}
@@ -17,7 +17,6 @@ button,.btn{border:0;border-radius:12px;min-height:48px;padding:0 15px;font-size
 .toolbar{display:flex;gap:10px;margin-top:12px}
 .tool{flex:1;background:#29323b;color:#fff}
 .primary{width:100%;background:#fff;color:#111;margin-top:12px}
-.primary:disabled{opacity:.55}
 .badge{display:inline-block;padding:5px 9px;background:#242c34;border-radius:20px;margin:10px 4px 0 0;color:#aeb8c2;font-size:12px}
 .muted{color:#89949f;font-size:13px;line-height:1.65}
 .hidden{display:none}
@@ -33,29 +32,42 @@ button,.btn{border:0;border-radius:12px;min-height:48px;padding:0 15px;font-size
 .open{background:#29313a;color:#fff}.download{background:#fff;color:#111}
 audio{width:100%;margin-top:10px}
 .mode{font-size:12px;color:#7fd3a4;margin-top:10px}
+.tip{background:#202832;border-radius:12px;padding:12px;margin-top:12px;color:#b8c2cc;line-height:1.7}
 </style>
 </head>
 <body>
 <main class="wrap">
 <h1>Video Collector</h1>
-<div class="sub">V5.3 完整版：抖音本地直解析 + 原声音频；小红书 H.264 结构化解析 + 下载前媒体校验。视频与音频直接下载到手机。</div>
+<div class="sub">
+V6：抖音 / 小红书改为“真实浏览器会话解析”。打开平台真实网页，播放后提取当前媒体；Cookie 与页面会话只留在手机。
+</div>
 
 <section class="card">
 <textarea id="txt" placeholder="粘贴抖音 / 小红书 / B站等分享链接或完整分享文案"></textarea>
+
 <div class="toolbar">
   <button id="clearBtn" class="tool">清空</button>
   <button id="pasteBtn" class="tool">粘贴最新链接</button>
 </div>
-<button id="go" class="primary">开始解析</button>
+
+<button id="go" class="primary">打开并解析</button>
+
 <div>
-  <span class="badge">抖音·本地直解析</span>
-  <span class="badge">小红书·H.264</span>
-  <span class="badge">B站·云端</span>
-  <span class="badge">快手·云端</span>
+  <span class="badge">抖音·浏览器会话</span>
+  <span class="badge">小红书·浏览器会话</span>
+  <span class="badge">B站·云端辅助</span>
+  <span class="badge">快手·云端辅助</span>
   <span class="badge">视频号·受限</span>
-  <span class="badge">音频</span>
+  <span class="badge">视频/音频</span>
 </div>
-<div class="muted" style="margin-top:10px">只处理公开可访问且你有权保存的内容；不会绕过登录、验证码、DRM 或访问控制。</div>
+
+<div class="tip">
+抖音 / 小红书：点“打开并解析”后会进入真实平台页面。若页面没有自动播放，请手动点播放，再点顶部“提取当前媒体”。
+</div>
+
+<div class="muted" style="margin-top:10px">
+只处理公开可访问且你有权保存的内容；不会绕过登录、验证码、DRM 或访问控制。
+</div>
 </section>
 
 <section id="status" class="card hidden"></section>
@@ -64,62 +76,107 @@ audio{width:100%;margin-top:10px}
 
 <script>
 const SERVER='https://video-collector-0d1n.onrender.com';
-const txt=document.getElementById('txt'),go=document.getElementById('go'),
-status=document.getElementById('status'),result=document.getElementById('result'),
-clearBtn=document.getElementById('clearBtn'),pasteBtn=document.getElementById('pasteBtn');
 
-let busy=false;
+const txt=document.getElementById('txt');
+const go=document.getElementById('go');
+const clearBtn=document.getElementById('clearBtn');
+const pasteBtn=document.getElementById('pasteBtn');
+const status=document.getElementById('status');
+const result=document.getElementById('result');
 
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
-function showStatus(msg,cls='status'){status.className='card '+cls;status.textContent=msg;}
-function hideStatus(){status.className='card hidden';status.textContent='';}
-function setBusy(v){busy=v;go.disabled=v;go.textContent=v?'正在解析…':'开始解析';}
-function firstUrl(text){const m=String(text||'').match(/https?:\/\/[^\s，。；;）),]+/i);return m?m[0]:'';}
-function localPlatform(url){const l=url.toLowerCase();return l.includes('douyin.com')||l.includes('iesdouyin.com')||l.includes('xiaohongshu.com')||l.includes('xhslink.');}
+function esc(v){
+  return String(v??'').replace(/[&<>"']/g,c=>({
+    '&':'&amp;',
+    '<':'&lt;',
+    '>':'&gt;',
+    '"':'&quot;',
+    "'":'&#039;'
+  }[c]));
+}
 
-clearBtn.onclick=()=>{txt.value='';hideStatus();result.className='card hidden';result.innerHTML='';txt.focus();};
+function showStatus(msg,cls='status'){
+  status.className='card '+cls;
+  status.textContent=msg;
+}
+
+function hideStatus(){
+  status.className='card hidden';
+  status.textContent='';
+}
+
+function firstUrl(text){
+  const m=String(text||'').match(/https?:\/\/[^\s，。；;）),]+/i);
+  return m?m[0]:'';
+}
+
+function browserPlatform(url){
+  const l=url.toLowerCase();
+  return l.includes('douyin.com')
+      || l.includes('iesdouyin.com')
+      || l.includes('xiaohongshu.com')
+      || l.includes('xhslink.');
+}
+
+clearBtn.onclick=()=>{
+  txt.value='';
+  hideStatus();
+  result.className='card hidden';
+  result.innerHTML='';
+};
 
 pasteBtn.onclick=async()=>{
   let value='';
+
   if(window.AndroidClipboard&&AndroidClipboard.getText){
-    try{value=AndroidClipboard.getText()||'';}catch(e){}
+    try{
+      value=AndroidClipboard.getText()||'';
+    }catch(e){}
   }
+
   if(!value&&navigator.clipboard){
-    try{value=await navigator.clipboard.readText();}catch(e){}
+    try{
+      value=await navigator.clipboard.readText();
+    }catch(e){}
   }
-  if(!value){showStatus('剪贴板里没有可粘贴的内容。','err');return;}
-  txt.value=value.trim();hideStatus();result.className='card hidden';result.innerHTML='';
+
+  if(!value){
+    showStatus('剪贴板里没有可粘贴的内容。','err');
+    return;
+  }
+
+  txt.value=value.trim();
+  hideStatus();
+  result.className='card hidden';
+  result.innerHTML='';
 };
 
-window.onLocalParseStatus=(message)=>showStatus(message,'status');
-
-window.onLocalParseError=(message)=>{
-  setBusy(false);
-  if(message==='local_unsupported'){
-    parseCloud(txt.value.trim());
-  }else{
-    showStatus(message,'err');
-  }
+window.onBrowserMediaError=(message)=>{
+  showStatus(message,'err');
 };
 
-window.onLocalParseResult=(data)=>{
-  setBusy(false);
+window.onBrowserMediaResult=(data)=>{
   hideStatus();
   renderResult(data,true);
 };
 
 function appDownload(url,filename,referer){
   if(window.AndroidDownloader&&AndroidDownloader.download){
-    AndroidDownloader.download(url,filename||'download',referer||'');
+    AndroidDownloader.download(
+      url,
+      filename||'download',
+      referer||''
+    );
   }else{
     location.href=url;
   }
 }
 
-function renderResult(data,isLocal){
+function renderResult(data,isBrowser){
   const d=data.data||data;
-  const vids=d.videos||[],audios=d.audios||[];
-  const referer=d.resolved_url||d.referer||d.source_url||'';
+  const vids=d.videos||[];
+  const audios=d.audios||[];
+  const referer=d.resolved_url||d.source_url||'';
+
   const first=vids[0];
 
   const preview=first&&first.url
@@ -129,14 +186,20 @@ function renderResult(data,isLocal){
   const videoRows=vids.map((f,i)=>`
     <div class="row">
       <div>
-        <div>${esc(f.quality||'视频源')}</div>
+        <div>${esc(f.quality||'视频')}</div>
         <div class="muted">${esc(f.ext||'mp4')}</div>
       </div>
       <div class="actions">
         <a class="btn open" href="${esc(f.url)}" target="_blank" rel="noopener">打开</a>
-        <button class="btn download" onclick="appDownload('${esc(f.url)}','${esc((d.title||'video')+'_'+(i+1)+'.'+(f.ext||'mp4'))}','${esc(referer)}')">下载</button>
+        <button class="btn download"
+          onclick="appDownload(
+            '${esc(f.url)}',
+            '${esc((d.title||'video')+'_'+(i+1)+'.'+(f.ext||'mp4'))}',
+            '${esc(referer)}'
+          )">下载</button>
       </div>
-    </div>`).join('');
+    </div>
+  `).join('');
 
   const audioRows=audios.map((a,i)=>`
     <div class="audioRow">
@@ -147,21 +210,40 @@ function renderResult(data,isLocal){
         </div>
         <div class="actions">
           <a class="btn open" href="${esc(a.url)}" target="_blank" rel="noopener">打开</a>
-          <button class="btn download" onclick="appDownload('${esc(a.url)}','${esc((d.title||'audio')+'_音频_'+(i+1)+'.'+(a.ext||'m4a'))}','${esc(referer)}')">下载音频</button>
+          <button class="btn download"
+            onclick="appDownload(
+              '${esc(a.url)}',
+              '${esc((d.title||'audio')+'_音频_'+(i+1)+'.'+(a.ext||'m4a'))}',
+              '${esc(referer)}'
+            )">下载音频</button>
         </div>
       </div>
       <audio controls preload="metadata" src="${esc(a.url)}"></audio>
-    </div>`).join('');
+    </div>
+  `).join('');
 
   result.innerHTML=`
     ${preview}
-    <div class="title">${esc(d.title||'未命名内容')}</div>
-    <div class="meta">${d.author?'作者：'+esc(d.author)+'<br>':''}${d.platform?'平台：'+esc(d.platform):''}</div>
-    <div class="mode">${isLocal?'手机本地解析':'云端辅助解析'}</div>
-    ${vids.length?`<div class="sectionTitle">视频</div>${videoRows}`:''}
-    ${audios.length?`<div class="sectionTitle">音频</div>${audioRows}`:''}
-    ${!vids.length&&!audios.length?'<div class="muted" style="margin-top:14px">没有发现可直接访问的视频或音频资源。</div>':''}
+    <div class="title">${esc(d.title||'当前页面媒体')}</div>
+    <div class="meta">平台：${esc(d.platform||'Browser')}</div>
+    <div class="mode">${isBrowser?'当前手机浏览器会话媒体':'云端辅助解析'}</div>
+
+    ${vids.length
+      ? `<div class="sectionTitle">视频</div>${videoRows}`
+      : ''
+    }
+
+    ${audios.length
+      ? `<div class="sectionTitle">音频</div>${audioRows}`
+      : ''
+    }
+
+    ${!vids.length&&!audios.length
+      ? '<div class="muted" style="margin-top:14px">没有发现通过校验的媒体资源。</div>'
+      : ''
+    }
   `;
+
   result.className='card';
 }
 
@@ -171,22 +253,30 @@ async function parseCloud(text){
   try{
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),20000);
+
     let r;
 
     try{
-      r=await fetch(SERVER+'/api/parse',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({text}),
-        signal:controller.signal
-      });
+      r=await fetch(
+        SERVER+'/api/parse',
+        {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({text}),
+          signal:controller.signal
+        }
+      );
     }finally{
       clearTimeout(timer);
     }
 
     const raw=await r.text();
+
     let j=null;
-    try{j=raw?JSON.parse(raw):null;}catch(e){}
+
+    try{
+      j=raw?JSON.parse(raw):null;
+    }catch(e){}
 
     if(!r.ok||!j){
       throw new Error('云端没有返回有效结果');
@@ -194,16 +284,13 @@ async function parseCloud(text){
 
     if(!j.success){
       showStatus(j.error||'云端解析失败','err');
-      setBusy(false);
       return;
     }
 
-    setBusy(false);
     hideStatus();
     renderResult(j,false);
 
   }catch(e){
-    setBusy(false);
     showStatus(
       e&&e.name==='AbortError'
         ? '云端辅助解析超时。'
@@ -214,21 +301,35 @@ async function parseCloud(text){
 }
 
 go.onclick=()=>{
-  if(busy)return;
-
   const text=txt.value.trim();
-  if(!text){showStatus('请先粘贴分享链接或分享文案。','err');return;}
+
+  if(!text){
+    showStatus('请先粘贴分享链接或分享文案。','err');
+    return;
+  }
 
   const url=firstUrl(text);
-  if(!url){showStatus('没有识别到有效链接。','err');return;}
+
+  if(!url){
+    showStatus('没有识别到有效链接。','err');
+    return;
+  }
 
   result.className='card hidden';
   result.innerHTML='';
-  setBusy(true);
 
-  if(localPlatform(url)&&window.AndroidLocalParser&&AndroidLocalParser.parse){
-    showStatus('正在启动手机本地解析…','status');
-    AndroidLocalParser.parse(text);
+  if(
+    browserPlatform(url)
+    && window.AndroidBrowserSession
+    && AndroidBrowserSession.open
+  ){
+    showStatus(
+      '正在进入真实平台页面。打开后先播放视频，再点顶部“提取当前媒体”。',
+      'status'
+    );
+
+    AndroidBrowserSession.open(text);
+
   }else{
     parseCloud(text);
   }
