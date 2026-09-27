@@ -9,6 +9,7 @@ import android.content.ClipData;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
+import android.media.MediaScannerConnection;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -82,7 +83,7 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(true);
-        s.setUserAgentString(s.getUserAgentString()+" VideoCollectorApp/3.4");
+        s.setUserAgentString(s.getUserAgentString()+" VideoCollectorApp/4.0");
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView,true);
@@ -140,8 +141,15 @@ public class MainActivity extends Activity {
             if(referer!=null && !referer.trim().isEmpty()){
                 req.addRequestHeader("Referer",referer);
             }
+            String mimeType=guessMimeType(filename);
+            req.setMimeType(mimeType);
             req.setTitle(filename);
-            req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,filename);
+
+            String targetDir=getTargetDirectory(filename);
+            req.setDestinationInExternalPublicDir(
+                targetDir,
+                "VideoCollector/"+filename
+            );
 
             currentDownloadId=downloadManager.enqueue(req);
             lastBytes=0L;
@@ -159,6 +167,35 @@ public class MainActivity extends Activity {
     private String sanitize(String s){
         if(s==null||s.trim().isEmpty()) return "download";
         return s.replaceAll("[\\\\/:*?\"<>|]","_");
+    }
+
+
+    private String guessMimeType(String filename){
+        String lower=filename==null ? "" : filename.toLowerCase();
+        if(lower.endsWith(".mp4")) return "video/mp4";
+        if(lower.endsWith(".webm")) return "video/webm";
+        if(lower.endsWith(".mkv")) return "video/x-matroska";
+        if(lower.endsWith(".mov")) return "video/quicktime";
+        if(lower.endsWith(".mp3")) return "audio/mpeg";
+        if(lower.endsWith(".m4a")) return "audio/mp4";
+        if(lower.endsWith(".aac")) return "audio/aac";
+        if(lower.endsWith(".wav")) return "audio/wav";
+        if(lower.endsWith(".ogg")) return "audio/ogg";
+        return "application/octet-stream";
+    }
+
+    private String getTargetDirectory(String filename){
+        String lower=filename==null ? "" : filename.toLowerCase();
+        if(lower.endsWith(".mp4") || lower.endsWith(".webm") ||
+           lower.endsWith(".mkv") || lower.endsWith(".mov")){
+            return Environment.DIRECTORY_MOVIES;
+        }
+        if(lower.endsWith(".mp3") || lower.endsWith(".m4a") ||
+           lower.endsWith(".aac") || lower.endsWith(".wav") ||
+           lower.endsWith(".ogg")){
+            return Environment.DIRECTORY_MUSIC;
+        }
+        return Environment.DIRECTORY_DOWNLOADS;
     }
 
     private void poll(final long id,final String filename){
@@ -182,7 +219,38 @@ public class MainActivity extends Activity {
                     downloadProgress.setIndeterminate(false);
                     downloadProgress.setProgress(100);
                     downloadText.setText("下载完成："+filename+"  100%");
-                    Toast.makeText(this,"下载完成，已保存到 Download 文件夹",Toast.LENGTH_LONG).show();
+
+                    try{
+                        int uriIndex=c.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI);
+                        if(uriIndex>=0){
+                            String localUri=c.getString(uriIndex);
+                            if(localUri!=null && localUri.startsWith("file://")){
+                                String localPath=Uri.parse(localUri).getPath();
+                                if(localPath!=null){
+                                    MediaScannerConnection.scanFile(
+                                        MainActivity.this,
+                                        new String[]{localPath},
+                                        new String[]{guessMimeType(filename)},
+                                        null
+                                    );
+                                }
+                            }
+                        }
+                    }catch(Exception ignored){}
+
+                    String lower=filename.toLowerCase();
+                    boolean isVideo=
+                        lower.endsWith(".mp4") || lower.endsWith(".webm") ||
+                        lower.endsWith(".mkv") || lower.endsWith(".mov");
+
+                    Toast.makeText(
+                        this,
+                        isVideo
+                            ? "下载完成，已保存到 Movies/VideoCollector，并已通知系统相册"
+                            : "下载完成，已保存到 Music/VideoCollector",
+                        Toast.LENGTH_LONG
+                    ).show();
+
                     currentDownloadId=-1L;
                     return;
                 }
