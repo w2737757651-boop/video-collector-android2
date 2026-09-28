@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
 
         s.setUserAgentString(
             s.getUserAgentString()
-                + " VideoCollectorApp/7.0.1"
+                + " VideoCollectorApp/7.0.2"
         );
 
         webView.addJavascriptInterface(

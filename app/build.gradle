@@ -6,12 +6,18 @@ android {
     namespace 'com.videocollector.app'
     compileSdk 35
 
+    packaging {
+        resources {
+            excludes += ['META-INF/**']
+        }
+    }
+
     defaultConfig {
         applicationId "com.videocollector.app"
         minSdk 23
         targetSdk 35
-        versionCode 12
-        versionName "7.0.1"
+        versionCode 13
+        versionName "7.0.2"
     }
 }
 
