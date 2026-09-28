@@ -10,11 +10,11 @@ android {
         applicationId "com.videocollector.app"
         minSdk 23
         targetSdk 35
-        versionCode 11
-        versionName "7.0"
+        versionCode 12
+        versionName "7.0.1"
     }
 }
 
 dependencies {
-    implementation files('libs/nativecore.aar')
+    implementation files('libs/nativecore-classes.jar')
 }
