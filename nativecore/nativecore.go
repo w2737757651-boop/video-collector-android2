@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,7 +22,20 @@ import (
 var dataDir string
 
 var httpURLRE = regexp.MustCompile(`https?://[^\s，。；;）),]+`)
-var xhsIDRE = regexp.MustCompile(`/(?:explore|discovery/item)/([0-9a-fA-F]+)`)
+var xhsNotePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)/(?:explore|discovery/item)/([0-9a-f]{24})`),
+	regexp.MustCompile(`(?i)["'](?:noteId|note_id|noteID)["']\s*:\s*["']([0-9a-f]{24})["']`),
+	regexp.MustCompile(`(?i)(?:noteId|note_id|noteID)=([0-9a-f]{24})`),
+	regexp.MustCompile(`(?i)%2F(?:explore|discovery%2Fitem)%2F([0-9a-f]{24})`),
+}
+
+var xhsAny24RE = regexp.MustCompile(`(?i)\b([0-9a-f]{24})\b`)
+
+var xhsTokenPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(?:xsec_token|xsecToken)=([^&"'<>\\\s]+)`),
+	regexp.MustCompile(`(?i)["'](?:xsec_token|xsecToken)["']\s*:\s*["']([^"']+)["']`),
+	regexp.MustCompile(`(?i)(?:xsec_token|xsecToken)%3D([^&"'<>\\\s]+)`),
+}
 
 type mediaItem struct {
 	Quality string `json:"quality"`
@@ -58,7 +73,7 @@ func Init(dir string) {
 }
 
 func Version() string {
-	return "7.0"
+	return "7.1.0"
 }
 
 func Parse(text string) string {
@@ -137,6 +152,137 @@ func resolveFinalURL(rawURL, userAgent string) (string, error) {
 		return rawURL, nil
 	}
 	return resp.Request.URL.String(), nil
+}
+
+func resolvePage(rawURL, userAgent string) (string, string, error) {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("重定向次数过多")
+			}
+			req.Header.Set("User-Agent", userAgent)
+			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+			req.Header.Set("Referer", "https://www.xiaohongshu.com/")
+			return nil
+		},
+	}
+
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Referer", "https://www.xiaohongshu.com/")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	finalURL := rawURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return finalURL, string(bodyBytes), nil
+}
+
+func decodeVariants(s string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+
+	add(s)
+	add(html.UnescapeString(s))
+	add(strings.ReplaceAll(s, `\/`, `/`))
+
+	cur := s
+	for i := 0; i < 3; i++ {
+		if u, err := url.QueryUnescape(cur); err == nil && u != cur {
+			add(u)
+			cur = u
+		}
+	}
+
+	return out
+}
+
+func findXHSContext(sourceURL, finalURL, body string) (string, string) {
+	variants := []string{}
+	for _, s := range []string{sourceURL, finalURL, body} {
+		variants = append(variants, decodeVariants(s)...)
+	}
+
+	noteID := ""
+	token := ""
+
+	// Prefer actual URL query parameters first.
+	for _, s := range variants {
+		if u, err := url.Parse(s); err == nil && u.Scheme != "" {
+			q := u.Query()
+			if token == "" {
+				token = q.Get("xsec_token")
+				if token == "" {
+					token = q.Get("xsecToken")
+				}
+			}
+		}
+	}
+
+	// Then inspect canonical URLs / SSR JSON / encoded redirects.
+	for _, s := range variants {
+		if noteID == "" {
+			for _, re := range xhsNotePatterns {
+				if m := re.FindStringSubmatch(s); len(m) >= 2 {
+					noteID = m[1]
+					break
+				}
+			}
+		}
+
+		if token == "" {
+			for _, re := range xhsTokenPatterns {
+				if m := re.FindStringSubmatch(s); len(m) >= 2 {
+					token = m[1]
+					if dec, err := url.QueryUnescape(token); err == nil {
+						token = dec
+					}
+					token = strings.Trim(token, `"'`)
+					break
+				}
+			}
+		}
+	}
+
+	// Last-resort note id: only accept generic 24-hex when the text is clearly XHS-related.
+	if noteID == "" {
+		for _, s := range variants {
+			lower := strings.ToLower(s)
+			if !strings.Contains(lower, "xiaohongshu") &&
+				!strings.Contains(lower, "xhslink") &&
+				!strings.Contains(lower, "note") {
+				continue
+			}
+			if m := xhsAny24RE.FindStringSubmatch(s); len(m) >= 2 {
+				noteID = m[1]
+				break
+			}
+		}
+	}
+
+	return noteID, token
 }
 
 func douyinCommonParams() url.Values {
@@ -289,27 +435,31 @@ func parseDouyin(sourceURL string) result {
 }
 
 func parseXHS(sourceURL string) result {
-	finalURL, err := resolveFinalURL(sourceURL, xhs.DefaultUserAgent)
+	finalURL, pageBody, err := resolvePage(sourceURL, xhs.DefaultUserAgent)
 	if err != nil {
 		return result{Success: false, Platform: "XiaoHongShu", SourceURL: sourceURL, Error: "小红书短链展开失败：" + err.Error(), Code: "XHS_RESOLVE"}
 	}
 
-	u, err := url.Parse(finalURL)
-	if err != nil {
-		return result{Success: false, Platform: "XiaoHongShu", SourceURL: sourceURL, Error: "小红书链接格式错误：" + err.Error(), Code: "XHS_URL"}
-	}
-
-	m := xhsIDRE.FindStringSubmatch(u.Path)
-	if len(m) < 2 {
-		return result{Success: false, Platform: "XiaoHongShu", SourceURL: sourceURL, ResolvedURL: finalURL, Error: "没有从分享链接中识别到小红书 Note ID。", Code: "XHS_ID"}
-	}
-	noteID := m[1]
-	token := u.Query().Get("xsec_token")
-	if token == "" {
-		token = u.Query().Get("xsecToken")
+	noteID, token := findXHSContext(sourceURL, finalURL, pageBody)
+	if noteID == "" {
+		return result{
+			Success: false,
+			Platform: "XiaoHongShu / Go Local",
+			SourceURL: sourceURL,
+			ResolvedURL: finalURL,
+			Error: "分享短链已打开，但仍未从最终网址、跳转参数或页面 SSR 数据中找到 Note ID。请确认复制的是某一条具体笔记的“分享→复制链接”。",
+			Code: "XHS_ID",
+		}
 	}
 	if token == "" {
-		return result{Success: false, Platform: "XiaoHongShu", SourceURL: sourceURL, ResolvedURL: finalURL, Error: "分享链接没有携带可用的 xsec_token。请在小红书里重新点“分享→复制链接”。", Code: "XHS_TOKEN"}
+		return result{
+			Success: false,
+			Platform: "XiaoHongShu / Go Local",
+			SourceURL: sourceURL,
+			ResolvedURL: finalURL,
+			Error: "已识别 Note ID，但没有找到 xsec_token。请重新在小红书内点“分享→复制链接”，不要复制浏览器地址栏。",
+			Code: "XHS_TOKEN",
+		}
 	}
 
 	cfg := xhs.DefaultConfig()

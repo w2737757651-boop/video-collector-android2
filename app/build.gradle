@@ -16,8 +16,8 @@ android {
         applicationId "com.videocollector.app"
         minSdk 23
         targetSdk 35
-        versionCode 14
-        versionName "7.0.3"
+        versionCode 16
+        versionName "7.1.0"
     }
 }
 
