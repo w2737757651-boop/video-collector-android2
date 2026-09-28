@@ -12,63 +12,62 @@ body{margin:0;background:#101317;color:#f5f7fa;font-family:-apple-system,BlinkMa
 h1{font-size:34px;margin:0 0 8px}
 .sub{color:#9aa4ae;line-height:1.7;margin-bottom:18px}
 .card{background:#181d23;border:1px solid #2a333c;border-radius:18px;padding:16px;margin-bottom:14px}
-textarea{width:100%;height:160px;border:1px solid #36414c;border-radius:14px;background:#0f1317;color:#fff;padding:14px;font-size:16px;resize:vertical}
+textarea{width:100%;height:150px;border:1px solid #36414c;border-radius:14px;background:#0f1317;color:#fff;padding:14px;font-size:16px;resize:vertical}
 button,.btn{border:0;border-radius:12px;min-height:48px;padding:0 15px;font-size:15px;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .toolbar{display:flex;gap:10px;margin-top:12px}
 .tool{flex:1;background:#29323b;color:#fff}
 .primary{width:100%;background:#fff;color:#111;margin-top:12px}
 .primary:disabled{opacity:.55}
-.fallback{width:100%;background:#ff3158;color:#fff;margin-top:14px}
+.action{width:100%;background:#fff;color:#111;margin-top:10px}
+.action.red{background:#ff3158;color:#fff}
+.action.dark{background:#29323b;color:#fff}
+.action.green{background:#1f8f5f;color:#fff}
 .badge{display:inline-block;padding:5px 9px;background:#242c34;border-radius:20px;margin:10px 4px 0 0;color:#aeb8c2;font-size:12px}
-.muted{color:#89949f;font-size:13px;line-height:1.65}
+.tip{background:#202832;border-radius:12px;padding:13px;margin-top:12px;color:#b8c2cc;line-height:1.7}
+.warn{background:#30252a;border:1px solid #5a353e;color:#ffb5bd;border-radius:12px;padding:13px;margin-top:12px;line-height:1.7}
+.ok{background:#1e3029;border:1px solid #2d5d48;color:#a8e5c8;border-radius:12px;padding:13px;margin-top:12px;line-height:1.7}
 .hidden{display:none}
 .err{color:#ff9292;white-space:pre-wrap;line-height:1.7}
 .status{color:#d4dde5;white-space:pre-wrap;line-height:1.7}
-.video{display:block;width:100%;max-height:560px;background:#000;border-radius:14px}
-.title{font-size:19px;font-weight:700;line-height:1.45;margin:12px 0 5px}
+.title{font-size:19px;font-weight:700;line-height:1.45;margin:6px 0}
 .meta{color:#a5afb9;font-size:14px;line-height:1.65}
-.sectionTitle{font-size:17px;font-weight:700;margin:18px 0 5px}
 .row{border-top:1px solid #2b333c;padding:12px 0;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.audioRow{border-top:1px solid #2b333c;padding:12px 0}
 .actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .open{background:#29313a;color:#fff}.download{background:#fff;color:#111}
-audio{width:100%;margin-top:10px}
-.mode{font-size:12px;color:#7fd3a4;margin-top:10px}
-.tip{background:#202832;border-radius:12px;padding:12px;margin-top:12px;color:#b8c2cc;line-height:1.7}
+.small{font-size:12px;color:#89949f;line-height:1.65}
 </style>
 </head>
 <body>
 <main class="wrap">
 <h1>王的解析</h1>
 <div class="sub">
-V7.2 Free Hybrid：小红书改为 SSR 页面优先并增加网页会话兜底；抖音继续 Go 优先 + 当前手机网页会话免费兜底。
+V8 Stable Free：不再把抖音/小红书的候选 CDN 地址伪装成“解析成功”。公开直链和可验证平台正常下载；受限平台改用官方页面 + 系统授权录屏保存。
 </div>
 
 <section class="card">
-<textarea id="txt" placeholder="粘贴抖音 / 小红书 / B站等分享链接或完整分享文案"></textarea>
+<textarea id="txt" placeholder="粘贴分享链接或完整分享文案"></textarea>
 
 <div class="toolbar">
   <button id="clearBtn" class="tool">清空</button>
   <button id="pasteBtn" class="tool">粘贴最新链接</button>
 </div>
 
-<button id="go" class="primary">开始解析</button>
+<button id="go" class="primary">开始处理</button>
 
 <div>
-  <span class="badge">抖音·Go+网页会话</span>
-  <span class="badge">小红书·SSR+网页会话</span>
+  <span class="badge">抖音·官方页/录屏</span>
+  <span class="badge">小红书·官方页/录屏</span>
   <span class="badge">B站·云端辅助</span>
   <span class="badge">快手·云端辅助</span>
-  <span class="badge">视频号·受限</span>
-  <span class="badge">视频/音频</span>
+  <span class="badge">公开直链·下载</span>
 </div>
 
 <div class="tip">
-抖音出现 DOUYIN_WALLED、小红书出现 XHS_ACCESS/XHS_ANTIBOT 时，APP 都会提供“网页会话继续解析”。先让真实页面里的视频开始播放，再点顶部“提取当前媒体”。
+核心规则：只有通过真实性校验的直接媒体才允许下载；抖音/小红书不再展示 0:00 假视频。系统录屏需要 Android 自己弹窗授权。
 </div>
 
-<div class="muted" style="margin-top:10px">
-只处理公开可访问且你有权保存的内容；不会自动绕过登录、验证码、DRM 或访问控制。
+<div class="small" style="margin-top:10px">
+只处理公开可访问且你有权保存的内容；不会绕过登录、验证码、DRM 或访问控制。
 </div>
 </section>
 
@@ -98,6 +97,29 @@ function esc(v){
   }[c]));
 }
 
+function js(v){
+  return String(v??'')
+    .replace(/\\/g,'\\\\')
+    .replace(/'/g,"\\'")
+    .replace(/\r/g,'')
+    .replace(/\n/g,' ');
+}
+
+function firstUrl(text){
+  const m=String(text||'').match(/https?:\/\/[^\s，。；;）),]+/i);
+  return m?m[0]:'';
+}
+
+function platform(url){
+  const l=url.toLowerCase();
+  if(l.includes('douyin.com')||l.includes('iesdouyin.com')) return 'douyin';
+  if(l.includes('xiaohongshu.com')||l.includes('xhslink.')) return 'xhs';
+  if(l.includes('bilibili.com')||l.includes('b23.tv')) return 'bili';
+  if(l.includes('kuaishou.com')||l.includes('v.kuaishou.com')) return 'kuaishou';
+  if(/\.(mp4|webm|mov|mkv|mp3|m4a|aac|wav|ogg)(\?|#|$)/i.test(url)) return 'direct';
+  return 'other';
+}
+
 function showStatus(msg,cls='status'){
   status.className='card '+cls;
   status.textContent=msg;
@@ -111,20 +133,7 @@ function hideStatus(){
 function setBusy(v){
   busy=v;
   go.disabled=v;
-  go.textContent=v?'正在解析…':'开始解析';
-}
-
-function firstUrl(text){
-  const m=String(text||'').match(/https?:\/\/[^\s，。；;）),]+/i);
-  return m?m[0]:'';
-}
-
-function localPlatform(url){
-  const l=url.toLowerCase();
-  return l.includes('douyin.com')
-      || l.includes('iesdouyin.com')
-      || l.includes('xiaohongshu.com')
-      || l.includes('xhslink.');
+  go.textContent=v?'正在处理…':'开始处理';
 }
 
 clearBtn.onclick=()=>{
@@ -136,181 +145,132 @@ clearBtn.onclick=()=>{
 
 pasteBtn.onclick=async()=>{
   let value='';
-
   if(window.AndroidClipboard&&AndroidClipboard.getText){
-    try{ value=AndroidClipboard.getText()||''; }catch(e){}
+    try{value=AndroidClipboard.getText()||'';}catch(e){}
   }
-
   if(!value&&navigator.clipboard){
-    try{ value=await navigator.clipboard.readText(); }catch(e){}
+    try{value=await navigator.clipboard.readText();}catch(e){}
   }
-
   if(!value){
     showStatus('剪贴板里没有可粘贴的内容。','err');
     return;
   }
-
   txt.value=value.trim();
   hideStatus();
   result.className='card hidden';
   result.innerHTML='';
 };
 
-function showBrowserFallback(data,platformName){
-  status.className='card err';
-  status.innerHTML='';
-
-  const p=document.createElement('div');
-  p.textContent=(data&&data.error?data.error:(platformName+'当前本地解析被平台限制。'))
-    +(data&&data.code?'\n\n错误代码：'+data.code:'');
-  p.style.whiteSpace='pre-wrap';
-  status.appendChild(p);
-
-  const b=document.createElement('button');
-  b.className='fallback';
-  b.textContent='使用网页会话继续解析（免费）';
-  b.onclick=()=>{
-    const source=(data&&data.source_url)||txt.value;
-    if(window.AndroidBrowserSession&&AndroidBrowserSession.open){
-      AndroidBrowserSession.open(source);
-    }
-  };
-  status.appendChild(b);
-
-  const tip=document.createElement('div');
-  tip.className='muted';
-  tip.style.marginTop='10px';
-  tip.textContent='进入真实网页后：先让视频开始播放 → 确认画面已经动起来 → 点顶部“提取当前媒体”。如果网页明确要求登录/验证码，本工具不会绕过。';
-  status.appendChild(tip);
-}
-
-window.onNativeParseResult=(data)=>{
-  setBusy(false);
-
-  if(!data||!data.success){
-    if(data&&data.code==='DOUYIN_WALLED'){
-      showBrowserFallback(data,'抖音');
-      return;
-    }
-
-    if(data&&['XHS_ACCESS','XHS_ANTIBOT','XHS_RATE','XHS_ID','XHS_TOKEN'].includes(data.code)){
-      showBrowserFallback(data,'小红书');
-      return;
-    }
-
-    const code=data&&data.code?`\n\n错误代码：${data.code}`:'';
-    showStatus((data&&data.error?data.error:'本地解析失败')+code,'err');
-    return;
-  }
-
+function renderRestricted(name,url){
   hideStatus();
-  renderResult(data,true);
-};
+  result.className='card';
+  result.innerHTML=`
+    <div class="title">${esc(name)}：稳定模式</div>
+    <div class="warn">
+      当前免费版不再尝试伪造平台内部 CDN 直链。原因是这类地址可能被登录态、会话、风控或分段播放保护，之前会出现 0:00 / 白屏 / 下载失败。
+    </div>
 
-window.onBrowserMediaError=(msg)=>{
-  showStatus(msg,'err');
-};
+    <button class="action dark"
+      onclick="AndroidExternal.open('${js(url)}')">
+      仅打开官方页面
+    </button>
 
-window.onBrowserMediaResult=(data)=>{
-  setBusy(false);
+    <button class="action red"
+      onclick="AndroidScreenRecorder.start('${js(url)}')">
+      系统授权录屏并打开官方页面
+    </button>
+
+    <button class="action green"
+      onclick="AndroidScreenRecorder.stop()">
+      停止录屏并保存
+    </button>
+
+    <div class="tip">
+      录屏流程：点“系统授权录屏” → Android 弹窗确认 → 自动打开官方页面/App → 播放你要保存的内容 → 完成后回到“王的解析”点停止，或用通知里的“停止并保存”。
+    </div>
+
+    <div class="small" style="margin-top:10px">
+      录屏文件保存到 Movies/WangParser/ScreenRecords，并通过 MediaStore 进入相册。若授权了麦克风，会录环境/扬声器声音；这不等于抓取平台内部音频。源 App 若禁止系统录屏，可能得到黑屏，这是平台/系统限制，本工具不会绕过。
+    </div>
+  `;
+}
+
+function renderDirect(url){
   hideStatus();
-  renderResult(data,true);
-};
+  const ext=(url.match(/\.([a-z0-9]{2,5})(?:\?|#|$)/i)||[])[1]||'mp4';
+  const isAudio=/^(mp3|m4a|aac|wav|ogg)$/i.test(ext);
+  const filename=(isAudio?'音频_':'视频_')+Date.now()+'.'+ext;
 
-function appDownload(url,filename,referer){
-  if(window.AndroidDownloader&&AndroidDownloader.download){
-    AndroidDownloader.download(url,filename||'download',referer||'');
-  }else{
-    location.href=url;
-  }
+  result.className='card';
+  result.innerHTML=`
+    <div class="title">公开媒体直链</div>
+    <div class="ok">这个链接本身就是媒体地址。下载前 APP 仍会对视频做真实性校验。</div>
+    <div class="row">
+      <div class="meta">${esc(ext.toUpperCase())}</div>
+      <div class="actions">
+        <a class="btn open" href="${esc(url)}" target="_blank" rel="noopener">打开</a>
+        <button class="btn download"
+          onclick="AndroidDownloader.download('${js(url)}','${js(filename)}','')">下载</button>
+      </div>
+    </div>
+  `;
 }
 
-function appDownloadSession(url,filename,referer){
-  if(window.AndroidDownloader&&AndroidDownloader.downloadSession){
-    AndroidDownloader.downloadSession(url,filename||'download',referer||'');
-  }else{
-    appDownload(url,filename,referer);
-  }
-}
-
-function safeJs(v){
-  return String(v??'')
-    .replace(/\\/g,'\\\\')
-    .replace(/'/g,"\\'")
-    .replace(/\r/g,'')
-    .replace(/\n/g,' ');
-}
-
-function renderResult(data,isLocal){
+function renderCloud(data){
   const d=data.data||data;
   const vids=d.videos||[];
   const audios=d.audios||[];
   const referer=d.referer||d.resolved_url||d.source_url||'';
-  const session=!!d.session_download;
-
-  const first=vids[0];
-
-  const preview=first&&first.url
-    ? `<video class="video" controls playsinline preload="metadata"><source src="${esc(first.url)}"></video>`
-    : '';
 
   const videoRows=vids.map((f,i)=>`
     <div class="row">
       <div>
         <div>${esc(f.quality||'视频')}</div>
-        <div class="muted">${esc(f.ext||'mp4')}</div>
+        <div class="small">${esc(f.ext||'mp4')}</div>
       </div>
       <div class="actions">
         <a class="btn open" href="${esc(f.url)}" target="_blank" rel="noopener">打开</a>
         <button class="btn download"
-          onclick="${session?'appDownloadSession':'appDownload'}(
-            '${safeJs(f.url)}',
-            '${safeJs((d.title||'video')+'_'+(i+1)+'.'+(f.ext||'mp4'))}',
-            '${safeJs(referer)}'
+          onclick="AndroidDownloader.download(
+            '${js(f.url)}',
+            '${js((d.title||'video')+'_'+(i+1)+'.'+(f.ext||'mp4'))}',
+            '${js(referer)}'
           )">下载</button>
       </div>
     </div>
   `).join('');
 
   const audioRows=audios.map((a,i)=>`
-    <div class="audioRow">
-      <div class="row" style="border-top:0;padding-top:0">
-        <div>
-          <div>${esc(a.quality||'音频')}</div>
-          <div class="muted">${esc(a.ext||'mp3')}</div>
-        </div>
-        <div class="actions">
-          <a class="btn open" href="${esc(a.url)}" target="_blank" rel="noopener">打开</a>
-          <button class="btn download"
-            onclick="${session?'appDownloadSession':'appDownload'}(
-              '${safeJs(a.url)}',
-              '${safeJs((d.title||'audio')+'_音频_'+(i+1)+'.'+(a.ext||'mp3'))}',
-              '${safeJs(referer)}'
-            )">下载音频</button>
-        </div>
+    <div class="row">
+      <div>
+        <div>${esc(a.quality||'音频')}</div>
+        <div class="small">${esc(a.ext||'mp3')}</div>
       </div>
-      <audio controls preload="metadata" src="${esc(a.url)}"></audio>
+      <div class="actions">
+        <a class="btn open" href="${esc(a.url)}" target="_blank" rel="noopener">打开</a>
+        <button class="btn download"
+          onclick="AndroidDownloader.download(
+            '${js(a.url)}',
+            '${js((d.title||'audio')+'_音频_'+(i+1)+'.'+(a.ext||'mp3'))}',
+            '${js(referer)}'
+          )">下载</button>
+      </div>
     </div>
   `).join('');
 
-  result.innerHTML=`
-    ${preview}
-    <div class="title">${esc(d.title||'未命名内容')}</div>
-    <div class="meta">
-      ${d.author?'作者：'+esc(d.author)+'<br>':''}
-      平台：${esc(d.platform||'Local')}
-    </div>
-    <div class="mode">${session?'当前手机网页会话':'手机本地 Go 引擎'}</div>
-    ${vids.length?`<div class="sectionTitle">视频</div>${videoRows}`:''}
-    ${audios.length?`<div class="sectionTitle">音频</div>${audioRows}`:''}
-    ${!vids.length&&!audios.length?'<div class="muted" style="margin-top:14px">没有发现可下载的视频或音频。</div>':''}
-  `;
-
   result.className='card';
+  result.innerHTML=`
+    <div class="title">${esc(d.title||'解析结果')}</div>
+    <div class="meta">平台：${esc(d.platform||'Cloud')}</div>
+    <div class="tip">这里不预览候选视频；只有你点击下载后，通过 APP 的媒体真实性校验才会真正保存。</div>
+    ${videoRows}
+    ${audioRows}
+    ${!vids.length&&!audios.length?'<div class="warn">没有发现经过解析的媒体地址。</div>':''}
+  `;
 }
 
 async function parseCloud(text){
-  showStatus('该平台正在使用云端辅助解析…','status');
+  showStatus('正在使用云端辅助解析…','status');
 
   try{
     const controller=new AbortController();
@@ -318,43 +278,39 @@ async function parseCloud(text){
 
     let r;
     try{
-      r=await fetch(
-        SERVER+'/api/parse',
-        {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({text}),
-          signal:controller.signal
-        }
-      );
+      r=await fetch(SERVER+'/api/parse',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({text}),
+        signal:controller.signal
+      });
     }finally{
       clearTimeout(timer);
     }
 
     const raw=await r.text();
     let j=null;
-    try{ j=raw?JSON.parse(raw):null; }catch(e){}
+    try{j=raw?JSON.parse(raw):null;}catch(e){}
 
     if(!r.ok||!j) throw new Error('云端没有返回有效结果');
 
     if(!j.success){
-      setBusy(false);
       showStatus(j.error||'云端解析失败','err');
       return;
     }
 
-    setBusy(false);
     hideStatus();
-    renderResult(j,false);
+    renderCloud(j);
 
   }catch(e){
-    setBusy(false);
     showStatus(
       e&&e.name==='AbortError'
-        ? '云端辅助解析超时。'
+        ? '云端辅助解析超过 20 秒，已停止。'
         : '云端请求失败：'+e.message,
       'err'
     );
+  }finally{
+    setBusy(false);
   }
 }
 
@@ -362,14 +318,12 @@ go.onclick=()=>{
   if(busy)return;
 
   const text=txt.value.trim();
-
   if(!text){
     showStatus('请先粘贴分享链接或分享文案。','err');
     return;
   }
 
   const url=firstUrl(text);
-
   if(!url){
     showStatus('没有识别到有效链接。','err');
     return;
@@ -379,16 +333,27 @@ go.onclick=()=>{
   result.innerHTML='';
   setBusy(true);
 
-  if(
-    localPlatform(url)
-    && window.AndroidNativeParser
-    && AndroidNativeParser.parse
-  ){
-    showStatus('正在调用手机本地解析引擎…','status');
-    AndroidNativeParser.parse(text);
-  }else{
-    parseCloud(text);
+  const p=platform(url);
+
+  if(p==='douyin'){
+    setBusy(false);
+    renderRestricted('抖音',url);
+    return;
   }
+
+  if(p==='xhs'){
+    setBusy(false);
+    renderRestricted('小红书',url);
+    return;
+  }
+
+  if(p==='direct'){
+    setBusy(false);
+    renderDirect(url);
+    return;
+  }
+
+  parseCloud(text);
 };
 </script>
 </body>
