@@ -41,7 +41,7 @@ audio{width:100%;margin-top:10px}
 <main class="wrap">
 <h1>王的解析</h1>
 <div class="sub">
-V7.1 Free Hybrid：小红书加强短链/SSR识别；抖音先走手机本地 Go，触发平台风控时可使用当前手机网页会话免费兜底。
+V7.2 Free Hybrid：小红书改为 SSR 页面优先并增加网页会话兜底；抖音继续 Go 优先 + 当前手机网页会话免费兜底。
 </div>
 
 <section class="card">
@@ -56,7 +56,7 @@ V7.1 Free Hybrid：小红书加强短链/SSR识别；抖音先走手机本地 Go
 
 <div>
   <span class="badge">抖音·Go+网页会话</span>
-  <span class="badge">小红书·Go短链增强</span>
+  <span class="badge">小红书·SSR+网页会话</span>
   <span class="badge">B站·云端辅助</span>
   <span class="badge">快手·云端辅助</span>
   <span class="badge">视频号·受限</span>
@@ -64,7 +64,7 @@ V7.1 Free Hybrid：小红书加强短链/SSR识别；抖音先走手机本地 Go
 </div>
 
 <div class="tip">
-抖音若出现 DOUYIN_WALLED，不再只让你反复切网络：APP 会提供“网页会话继续解析”。打开真实抖音页后先让视频开始播放，再点顶部“提取当前媒体”。
+抖音出现 DOUYIN_WALLED、小红书出现 XHS_ACCESS/XHS_ANTIBOT 时，APP 都会提供“网页会话继续解析”。先让真实页面里的视频开始播放，再点顶部“提取当前媒体”。
 </div>
 
 <div class="muted" style="margin-top:10px">
@@ -156,12 +156,12 @@ pasteBtn.onclick=async()=>{
   result.innerHTML='';
 };
 
-function showDouyinFallback(data){
+function showBrowserFallback(data,platformName){
   status.className='card err';
   status.innerHTML='';
 
   const p=document.createElement('div');
-  p.textContent=(data&&data.error?data.error:'抖音当前本地接口被平台风控。')
+  p.textContent=(data&&data.error?data.error:(platformName+'当前本地解析被平台限制。'))
     +(data&&data.code?'\n\n错误代码：'+data.code:'');
   p.style.whiteSpace='pre-wrap';
   status.appendChild(p);
@@ -180,7 +180,7 @@ function showDouyinFallback(data){
   const tip=document.createElement('div');
   tip.className='muted';
   tip.style.marginTop='10px';
-  tip.textContent='进入抖音网页后：先点播放 → 确认视频已经动起来 → 点顶部“提取当前媒体”。';
+  tip.textContent='进入真实网页后：先让视频开始播放 → 确认画面已经动起来 → 点顶部“提取当前媒体”。如果网页明确要求登录/验证码，本工具不会绕过。';
   status.appendChild(tip);
 }
 
@@ -189,7 +189,12 @@ window.onNativeParseResult=(data)=>{
 
   if(!data||!data.success){
     if(data&&data.code==='DOUYIN_WALLED'){
-      showDouyinFallback(data);
+      showBrowserFallback(data,'抖音');
+      return;
+    }
+
+    if(data&&['XHS_ACCESS','XHS_ANTIBOT','XHS_RATE','XHS_ID','XHS_TOKEN'].includes(data.code)){
+      showBrowserFallback(data,'小红书');
       return;
     }
 

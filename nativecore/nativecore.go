@@ -73,7 +73,7 @@ func Init(dir string) {
 }
 
 func Version() string {
-	return "7.1.0"
+	return "7.2.0"
 }
 
 func Parse(text string) string {
@@ -163,7 +163,6 @@ func resolvePage(rawURL, userAgent string) (string, string, error) {
 			}
 			req.Header.Set("User-Agent", userAgent)
 			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-			req.Header.Set("Referer", "https://www.xiaohongshu.com/")
 			return nil
 		},
 	}
@@ -175,7 +174,6 @@ func resolvePage(rawURL, userAgent string) (string, string, error) {
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	req.Header.Set("Referer", "https://www.xiaohongshu.com/")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -434,6 +432,115 @@ func parseDouyin(sourceURL string) result {
 	}
 }
 
+var xhsMasterURLRE = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)"masterUrl"\s*:\s*"([^"]+)"`),
+	regexp.MustCompile(`(?i)"master_url"\s*:\s*"([^"]+)"`),
+	regexp.MustCompile(`(?i)"backupUrls"\s*:\s*\[([^\]]+)\]`),
+}
+var htmlTitleRE = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+
+func normalizeEmbeddedURL(s string) string {
+	s = html.UnescapeString(strings.TrimSpace(s))
+	repls := []struct{ old, new string }{
+		{`\/`, `/`},
+		{`\u002F`, `/`},
+		{`\u002f`, `/`},
+		{`\u0026`, `&`},
+		{`\u003D`, `=`},
+		{`\u003d`, `=`},
+		{`\u003F`, `?`},
+		{`\u003f`, `?`},
+	}
+	for _, r := range repls {
+		s = strings.ReplaceAll(s, r.old, r.new)
+	}
+	return strings.Trim(s, `"' `)
+}
+
+func looksLikeXHSVideoURL(u string) bool {
+	l := strings.ToLower(u)
+	if !strings.HasPrefix(l, "http") {
+		return false
+	}
+	if strings.Contains(l, ".jpg") ||
+		strings.Contains(l, ".jpeg") ||
+		strings.Contains(l, ".png") ||
+		strings.Contains(l, ".webp") ||
+		strings.Contains(l, ".gif") ||
+		strings.Contains(l, "imageview") ||
+		strings.Contains(l, "imagemogr") {
+		return false
+	}
+	if strings.Contains(l, "xhscdn") ||
+		strings.Contains(l, "sns-video") ||
+		strings.Contains(l, "/stream/") {
+		return true
+	}
+	return strings.Contains(l, ".mp4")
+}
+
+func extractXHSSSRVideos(pageBody string) ([]mediaItem, string) {
+	if strings.TrimSpace(pageBody) == "" {
+		return nil, ""
+	}
+
+	normalized := normalizeEmbeddedURL(pageBody)
+	seen := map[string]bool{}
+	urls := []string{}
+
+	add := func(raw string) {
+		raw = normalizeEmbeddedURL(raw)
+		if raw == "" || seen[raw] || !looksLikeXHSVideoURL(raw) {
+			return
+		}
+		seen[raw] = true
+		urls = append(urls, raw)
+	}
+
+	// Highest-confidence fields first.
+	for _, re := range xhsMasterURLRE {
+		for _, m := range re.FindAllStringSubmatch(normalized, -1) {
+			if len(m) < 2 {
+				continue
+			}
+			if strings.Contains(m[0], "backupUrls") {
+				for _, u := range httpURLRE.FindAllString(m[1], -1) {
+					add(u)
+				}
+			} else {
+				add(m[1])
+			}
+		}
+	}
+
+	// Fallback: scan embedded absolute URLs.
+	for _, u := range httpURLRE.FindAllString(normalized, -1) {
+		add(u)
+		if len(urls) >= 12 {
+			break
+		}
+	}
+
+	items := make([]mediaItem, 0, len(urls))
+	for i, u := range urls {
+		if i >= 8 {
+			break
+		}
+		items = append(items, mediaItem{
+			Quality: "小红书 SSR 视频",
+			URL:     u,
+			Ext:     "mp4",
+		})
+	}
+
+	title := ""
+	if m := htmlTitleRE.FindStringSubmatch(pageBody); len(m) >= 2 {
+		title = strings.TrimSpace(html.UnescapeString(m[1]))
+		title = strings.TrimSuffix(title, " - 小红书")
+	}
+	return items, title
+}
+
 func parseXHS(sourceURL string) result {
 	finalURL, pageBody, err := resolvePage(sourceURL, xhs.DefaultUserAgent)
 	if err != nil {
@@ -443,22 +550,37 @@ func parseXHS(sourceURL string) result {
 	noteID, token := findXHSContext(sourceURL, finalURL, pageBody)
 	if noteID == "" {
 		return result{
-			Success: false,
-			Platform: "XiaoHongShu / Go Local",
-			SourceURL: sourceURL,
+			Success:     false,
+			Platform:    "XiaoHongShu / Go Local",
+			SourceURL:   sourceURL,
 			ResolvedURL: finalURL,
-			Error: "分享短链已打开，但仍未从最终网址、跳转参数或页面 SSR 数据中找到 Note ID。请确认复制的是某一条具体笔记的“分享→复制链接”。",
-			Code: "XHS_ID",
+			Error:       "分享短链已打开，但仍未从最终网址、跳转参数或页面 SSR 数据中找到 Note ID。请确认复制的是某一条具体笔记的“分享→复制链接”。",
+			Code:        "XHS_ID",
 		}
 	}
 	if token == "" {
 		return result{
-			Success: false,
-			Platform: "XiaoHongShu / Go Local",
-			SourceURL: sourceURL,
+			Success:     false,
+			Platform:    "XiaoHongShu / Go Local",
+			SourceURL:   sourceURL,
 			ResolvedURL: finalURL,
-			Error: "已识别 Note ID，但没有找到 xsec_token。请重新在小红书内点“分享→复制链接”，不要复制浏览器地址栏。",
-			Code: "XHS_TOKEN",
+			Error:       "已识别 Note ID，但没有找到 xsec_token。请重新在小红书内点“分享→复制链接”，不要复制浏览器地址栏。",
+			Code:        "XHS_TOKEN",
+		}
+	}
+
+	// Prefer the server-rendered public page. This avoids the anonymous
+	// signed JSON API path that can return -101 login errors.
+	if ssrVideos, ssrTitle := extractXHSSSRVideos(pageBody); len(ssrVideos) > 0 {
+		return result{
+			Success:     true,
+			Platform:    "XiaoHongShu / SSR",
+			Title:       firstNonEmpty(ssrTitle, "小红书视频"),
+			SourceURL:   sourceURL,
+			ResolvedURL: finalURL,
+			Referer:     finalURL,
+			Videos:      ssrVideos,
+			Audios:      []mediaItem{},
 		}
 	}
 
@@ -489,6 +611,7 @@ func parseXHS(sourceURL string) result {
 			msg = "小红书当前网络请求过于频繁，请等待一会儿再试。"
 		case xhs.ErrAccess:
 			code = "XHS_ACCESS"
+			msg = "小红书公开 SSR 页面没有返回可用视频，后续接口又要求登录态。可以改用 APP 内“网页会话继续解析”；如果网页本身要求登录，本工具不会绕过登录限制。"
 		case xhs.ErrNetwork:
 			code = "XHS_NETWORK"
 		}

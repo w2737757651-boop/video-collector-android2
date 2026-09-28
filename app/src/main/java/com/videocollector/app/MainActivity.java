@@ -71,6 +71,7 @@ public class MainActivity extends Activity {
     private boolean currentDownloadPostVerify = false;
 
     private String currentPageUrl = "";
+    private String sessionPlatform = "Browser";
 
     private final Set<String> networkVideoCandidates =
         new CopyOnWriteArraySet<>();
@@ -142,7 +143,7 @@ public class MainActivity extends Activity {
         browserStatus.setTextSize(13f);
         browserStatus.setPadding(8, 8, 8, 0);
         browserStatus.setText(
-            "先让页面里的视频真正开始播放，再点“提取当前媒体”。"
+            "先让页面里的视频真正开始播放，再点“提取当前媒体”。如果网页要求登录，本工具不会绕过登录。"
         );
 
         browserToolbar.addView(row);
@@ -224,7 +225,7 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
         s.setUserAgentString(
-            s.getUserAgentString() + " WangParser/7.1.0"
+            s.getUserAgentString() + " WangParser/7.2.0"
         );
 
         homeWebView.addJavascriptInterface(
@@ -270,7 +271,7 @@ public class MainActivity extends Activity {
         String ua = s.getUserAgentString();
         s.setUserAgentString(
             ua.replace("; wv", "")
-                + " WangParserSession/7.1.0"
+                + " WangParserSession/7.2.0"
         );
 
         CookieManager cm = CookieManager.getInstance();
@@ -327,7 +328,7 @@ public class MainActivity extends Activity {
                         url == null ? "" : url;
 
                     browserStatus.setText(
-                        "页面已打开。请先点播放；视频开始播放后，再点“提取当前媒体”。"
+                        "页面已打开。请先让视频真正开始播放，再点“提取当前媒体”。如果页面跳到登录页，本工具不会绕过登录限制。"
                     );
                 }
             }
@@ -536,12 +537,21 @@ public class MainActivity extends Activity {
                     networkAudioCandidates.clear();
                     currentPageUrl = url;
 
+                    String low = url.toLowerCase(Locale.US);
+                    if (low.contains("xiaohongshu") || low.contains("xhslink")) {
+                        sessionPlatform = "XiaoHongShu";
+                    } else if (low.contains("douyin") || low.contains("iesdouyin")) {
+                        sessionPlatform = "Douyin";
+                    } else {
+                        sessionPlatform = "Browser";
+                    }
+
                     homeWebView.setVisibility(View.GONE);
                     browserToolbar.setVisibility(View.VISIBLE);
                     sessionWebView.setVisibility(View.VISIBLE);
 
                     browserStatus.setText(
-                        "正在打开抖音真实网页…"
+                        "正在打开" + sessionPlatform + "真实网页…"
                     );
 
                     sessionWebView.loadUrl(url);
@@ -574,6 +584,10 @@ public class MainActivity extends Activity {
             l.contains("douyinvod.com")
             || l.contains("/video/tos/")
             || l.contains("/aweme/v1/play/")
+            || l.contains("xhscdn.com")
+            || l.contains("xhscdn.net")
+            || l.contains("sns-video")
+            || l.contains("/stream/")
             || l.contains(".mp4")
         ) {
             if (
@@ -607,15 +621,19 @@ public class MainActivity extends Activity {
             "(function(){"
             + "const o={title:document.title||'',page:location.href,videos:[],audios:[]};"
             + "const v=new Set(),a=new Set();"
-            + "function addV(u){if(typeof u==='string'&&/^https?:/i.test(u)&&!u.includes('.m3u8')&&!u.includes('.m4s'))v.add(u);}"
-            + "function addA(u){if(typeof u==='string'&&/^https?:/i.test(u))a.add(u);}"
+            + "function norm(u){if(typeof u!=='string')return'';return u.replace(/\\\\u002F/gi,'/').replace(/\\\\\\//g,'/');}"
+            + "function addV(u){u=norm(u);if(!/^https?:/i.test(u))return;let l=u.toLowerCase();"
+            + " if(/\\.(jpg|jpeg|png|webp|gif)(\\?|$)/i.test(l)||l.includes('imageview')||l.includes('imagemogr'))return;"
+            + " if(l.includes('douyinvod')||l.includes('/video/tos/')||l.includes('/aweme/v1/play/')||l.includes('xhscdn')||l.includes('sns-video')||l.includes('/stream/')||l.includes('.mp4'))v.add(u);}"
+            + "function addA(u){u=norm(u);if(/^https?:/i.test(u)&&/\\.(m4a|mp3|aac)(\\?|$)/i.test(u))a.add(u);}"
             + "document.querySelectorAll('video').forEach(x=>{addV(x.currentSrc);addV(x.src);try{x.querySelectorAll('source').forEach(s=>addV(s.src));}catch(e){}});"
             + "document.querySelectorAll('audio').forEach(x=>{addA(x.currentSrc);addA(x.src);try{x.querySelectorAll('source').forEach(s=>addA(s.src));}catch(e){}});"
-            + "try{performance.getEntriesByType('resource').forEach(e=>{"
-            + " const u=e.name||'',l=u.toLowerCase();"
-            + " if(l.includes('douyinvod.com')||l.includes('/video/tos/')||l.includes('/aweme/v1/play/')||l.includes('.mp4'))addV(u);"
-            + " if(l.includes('.m4a')||l.includes('.mp3')||l.includes('.aac'))addA(u);"
-            + "});}catch(e){}"
+            + "try{performance.getEntriesByType('resource').forEach(e=>{addV(e.name||'');addA(e.name||'');});}catch(e){}"
+            + "try{let seen=0;function walk(x,d){if(!x||d>12||seen++>12000)return;"
+            + " if(typeof x==='string'){addV(x);addA(x);return;}"
+            + " if(Array.isArray(x)){for(let i=0;i<x.length&&i<300;i++)walk(x[i],d+1);return;}"
+            + " if(typeof x==='object'){for(const k in x){if(seen>12000)break;try{walk(x[k],d+1);}catch(e){}}}}"
+            + " walk(window.__INITIAL_STATE__,0);}catch(e){}"
             + "o.videos=[...v];o.audios=[...a];return JSON.stringify(o);"
             + "})()";
 
@@ -701,7 +719,7 @@ public class MainActivity extends Activity {
                 && audios.isEmpty()
             ) {
                 browserStatus.setText(
-                    "没有捕获到可直接下载的 HTTP 媒体。请确认视频已经真正开始播放；如果仍为空，这条作品可能使用 blob/MSE 分段播放，免费本地模式无法直接导出原文件。"
+                    "没有捕获到可直接下载的 HTTP 媒体。请确认视频已经真正开始播放；如果页面要求登录、验证码或只使用 blob/MSE 分段播放，免费本地模式不会绕过限制，也不会生成假文件。"
                 );
                 return;
             }
@@ -712,7 +730,7 @@ public class MainActivity extends Activity {
             result.put("success", true);
             result.put(
                 "platform",
-                "Douyin / 浏览器会话"
+                sessionPlatform + " / 浏览器会话"
             );
             result.put(
                 "title",
