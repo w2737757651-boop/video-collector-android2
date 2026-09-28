@@ -1,0 +1,19 @@
+THIRD PARTY NOTICES
+
+Video Collector V7 embeds the following open-source Go libraries at build time:
+
+1. douyin-cli
+   https://github.com/tamnd/douyin-cli
+   Version pinned: v0.1.1
+   License: Apache License 2.0
+
+2. xiaohongshu-cli
+   https://github.com/tamnd/xiaohongshu-cli
+   Version pinned: v0.2.0
+   License: Apache License 2.0
+
+These projects are independent tools and are not affiliated with Douyin,
+ByteDance, Xiaohongshu, or this application.
+
+The app is intended only for public content that the user has the right to save.
+It does not intentionally bypass login, CAPTCHA, DRM, or access controls.

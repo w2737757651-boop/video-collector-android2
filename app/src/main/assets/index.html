@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#101317">
-<title>Video Collector V6</title>
+<title>Video Collector V7 Free Local</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#101317;color:#f5f7fa;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
@@ -17,6 +17,7 @@ button,.btn{border:0;border-radius:12px;min-height:48px;padding:0 15px;font-size
 .toolbar{display:flex;gap:10px;margin-top:12px}
 .tool{flex:1;background:#29323b;color:#fff}
 .primary{width:100%;background:#fff;color:#111;margin-top:12px}
+.primary:disabled{opacity:.55}
 .badge{display:inline-block;padding:5px 9px;background:#242c34;border-radius:20px;margin:10px 4px 0 0;color:#aeb8c2;font-size:12px}
 .muted{color:#89949f;font-size:13px;line-height:1.65}
 .hidden{display:none}
@@ -39,7 +40,7 @@ audio{width:100%;margin-top:10px}
 <main class="wrap">
 <h1>Video Collector</h1>
 <div class="sub">
-V6：抖音 / 小红书改为“真实浏览器会话解析”。打开平台真实网页，播放后提取当前媒体；Cookie 与页面会话只留在手机。
+V7 Free Local：抖音 / 小红书解析引擎直接运行在手机内，不需要付费 API、电脑常开或 Render 参与解析。
 </div>
 
 <section class="card">
@@ -50,11 +51,11 @@ V6：抖音 / 小红书改为“真实浏览器会话解析”。打开平台真
   <button id="pasteBtn" class="tool">粘贴最新链接</button>
 </div>
 
-<button id="go" class="primary">打开并解析</button>
+<button id="go" class="primary">开始解析</button>
 
 <div>
-  <span class="badge">抖音·浏览器会话</span>
-  <span class="badge">小红书·浏览器会话</span>
+  <span class="badge">抖音·Go本地</span>
+  <span class="badge">小红书·Go本地</span>
   <span class="badge">B站·云端辅助</span>
   <span class="badge">快手·云端辅助</span>
   <span class="badge">视频号·受限</span>
@@ -62,7 +63,7 @@ V6：抖音 / 小红书改为“真实浏览器会话解析”。打开平台真
 </div>
 
 <div class="tip">
-抖音 / 小红书：点“打开并解析”后会进入真实平台页面。若页面没有自动播放，请手动点播放，再点顶部“提取当前媒体”。
+完全免费不代表平台永远不会风控。如果抖音提示网络触发风控，可切换手机流量/Wi‑Fi 后重新复制最新链接再试；小红书应使用“分享→复制链接”得到的完整最新链接。
 </div>
 
 <div class="muted" style="margin-top:10px">
@@ -84,6 +85,8 @@ const pasteBtn=document.getElementById('pasteBtn');
 const status=document.getElementById('status');
 const result=document.getElementById('result');
 
+let busy=false;
+
 function esc(v){
   return String(v??'').replace(/[&<>"']/g,c=>({
     '&':'&amp;',
@@ -104,12 +107,18 @@ function hideStatus(){
   status.textContent='';
 }
 
+function setBusy(v){
+  busy=v;
+  go.disabled=v;
+  go.textContent=v?'正在解析…':'开始解析';
+}
+
 function firstUrl(text){
   const m=String(text||'').match(/https?:\/\/[^\s，。；;）),]+/i);
   return m?m[0]:'';
 }
 
-function browserPlatform(url){
+function localPlatform(url){
   const l=url.toLowerCase();
   return l.includes('douyin.com')
       || l.includes('iesdouyin.com')
@@ -150,11 +159,15 @@ pasteBtn.onclick=async()=>{
   result.innerHTML='';
 };
 
-window.onBrowserMediaError=(message)=>{
-  showStatus(message,'err');
-};
+window.onNativeParseResult=(data)=>{
+  setBusy(false);
 
-window.onBrowserMediaResult=(data)=>{
+  if(!data||!data.success){
+    const code=data&&data.code?`\n\n错误代码：${data.code}`:'';
+    showStatus((data&&data.error?data.error:'本地解析失败')+code,'err');
+    return;
+  }
+
   hideStatus();
   renderResult(data,true);
 };
@@ -171,11 +184,19 @@ function appDownload(url,filename,referer){
   }
 }
 
-function renderResult(data,isBrowser){
+function safeJs(v){
+  return String(v??'')
+    .replace(/\\/g,'\\\\')
+    .replace(/'/g,"\\'")
+    .replace(/\r/g,'')
+    .replace(/\n/g,' ');
+}
+
+function renderResult(data,isLocal){
   const d=data.data||data;
   const vids=d.videos||[];
   const audios=d.audios||[];
-  const referer=d.resolved_url||d.source_url||'';
+  const referer=d.referer||d.resolved_url||d.source_url||'';
 
   const first=vids[0];
 
@@ -193,9 +214,9 @@ function renderResult(data,isBrowser){
         <a class="btn open" href="${esc(f.url)}" target="_blank" rel="noopener">打开</a>
         <button class="btn download"
           onclick="appDownload(
-            '${esc(f.url)}',
-            '${esc((d.title||'video')+'_'+(i+1)+'.'+(f.ext||'mp4'))}',
-            '${esc(referer)}'
+            '${safeJs(f.url)}',
+            '${safeJs((d.title||'video')+'_'+(i+1)+'.'+(f.ext||'mp4'))}',
+            '${safeJs(referer)}'
           )">下载</button>
       </div>
     </div>
@@ -206,15 +227,15 @@ function renderResult(data,isBrowser){
       <div class="row" style="border-top:0;padding-top:0">
         <div>
           <div>${esc(a.quality||'音频')}</div>
-          <div class="muted">${esc(a.ext||'m4a')}</div>
+          <div class="muted">${esc(a.ext||'mp3')}</div>
         </div>
         <div class="actions">
           <a class="btn open" href="${esc(a.url)}" target="_blank" rel="noopener">打开</a>
           <button class="btn download"
             onclick="appDownload(
-              '${esc(a.url)}',
-              '${esc((d.title||'audio')+'_音频_'+(i+1)+'.'+(a.ext||'m4a'))}',
-              '${esc(referer)}'
+              '${safeJs(a.url)}',
+              '${safeJs((d.title||'audio')+'_音频_'+(i+1)+'.'+(a.ext||'mp3'))}',
+              '${safeJs(referer)}'
             )">下载音频</button>
         </div>
       </div>
@@ -224,9 +245,12 @@ function renderResult(data,isBrowser){
 
   result.innerHTML=`
     ${preview}
-    <div class="title">${esc(d.title||'当前页面媒体')}</div>
-    <div class="meta">平台：${esc(d.platform||'Browser')}</div>
-    <div class="mode">${isBrowser?'当前手机浏览器会话媒体':'云端辅助解析'}</div>
+    <div class="title">${esc(d.title||'未命名内容')}</div>
+    <div class="meta">
+      ${d.author?'作者：'+esc(d.author)+'<br>':''}
+      平台：${esc(d.platform||'Local')}
+    </div>
+    <div class="mode">${isLocal?'手机本地 Go 引擎':'云端辅助解析'}</div>
 
     ${vids.length
       ? `<div class="sectionTitle">视频</div>${videoRows}`
@@ -239,7 +263,7 @@ function renderResult(data,isBrowser){
     }
 
     ${!vids.length&&!audios.length
-      ? '<div class="muted" style="margin-top:14px">没有发现通过校验的媒体资源。</div>'
+      ? '<div class="muted" style="margin-top:14px">没有发现可下载的视频或音频。</div>'
       : ''
     }
   `;
@@ -271,7 +295,6 @@ async function parseCloud(text){
     }
 
     const raw=await r.text();
-
     let j=null;
 
     try{
@@ -283,14 +306,18 @@ async function parseCloud(text){
     }
 
     if(!j.success){
+      setBusy(false);
       showStatus(j.error||'云端解析失败','err');
       return;
     }
 
+    setBusy(false);
     hideStatus();
     renderResult(j,false);
 
   }catch(e){
+    setBusy(false);
+
     showStatus(
       e&&e.name==='AbortError'
         ? '云端辅助解析超时。'
@@ -301,6 +328,8 @@ async function parseCloud(text){
 }
 
 go.onclick=()=>{
+  if(busy)return;
+
   const text=txt.value.trim();
 
   if(!text){
@@ -317,18 +346,19 @@ go.onclick=()=>{
 
   result.className='card hidden';
   result.innerHTML='';
+  setBusy(true);
 
   if(
-    browserPlatform(url)
-    && window.AndroidBrowserSession
-    && AndroidBrowserSession.open
+    localPlatform(url)
+    && window.AndroidNativeParser
+    && AndroidNativeParser.parse
   ){
     showStatus(
-      '正在进入真实平台页面。打开后先播放视频，再点顶部“提取当前媒体”。',
+      '正在调用手机本地 Go 解析引擎…',
       'status'
     );
 
-    AndroidBrowserSession.open(text);
+    AndroidNativeParser.parse(text);
 
   }else{
     parseCloud(text);
