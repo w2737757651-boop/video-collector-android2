@@ -10,8 +10,8 @@ android {
         applicationId "com.videocollector.app"
         minSdk 23
         targetSdk 35
-        versionCode 30
-        versionName "9.0.0-diag"
+        versionCode 31
+        versionName "9.0.1-diag"
     }
 
     compileOptions {
@@ -27,5 +27,4 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.webkit:webkit:1.12.1'
 }

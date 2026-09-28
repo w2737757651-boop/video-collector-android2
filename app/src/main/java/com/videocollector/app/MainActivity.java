@@ -33,9 +33,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.webkit.WebViewCompat;
-import androidx.webkit.WebViewFeature;
-
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -114,7 +111,7 @@ public class MainActivity extends Activity {
         root.setPadding(dp(14), dp(12), dp(14), dp(12));
 
         TextView title = new TextView(this);
-        title.setText("王的解析 · 本地会话诊断 V9");
+        title.setText("王的解析 · 本地会话诊断 V9.0.1");
         title.setTextColor(Color.WHITE);
         title.setTextSize(24f);
         title.setGravity(Gravity.CENTER_VERTICAL);
@@ -288,7 +285,7 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(true);
         s.setSupportMultipleWindows(false);
         s.setUserAgentString(
-            s.getUserAgentString() + " WangParserSessionDiag/9.0"
+            s.getUserAgentString() + " WangParserSessionDiag/9.0.1"
         );
 
         CookieManager cm = CookieManager.getInstance();
@@ -337,17 +334,8 @@ public class MainActivity extends Activity {
                         "PAGE " + redactUrl(currentPageUrl)
                     );
 
-                    // Fallback for WebView versions without document-start support.
-                    if (
-                        !WebViewFeature.isFeatureSupported(
-                            WebViewFeature.DOCUMENT_START_SCRIPT
-                        )
-                        && probeActive
-                    ) {
-                        view.evaluateJavascript(
-                            probeScript,
-                            null
-                        );
+                    if (probeActive && probeScript != null && !probeScript.isEmpty()) {
+                        view.evaluateJavascript(probeScript, null);
                     }
                 }
 
@@ -358,39 +346,70 @@ public class MainActivity extends Activity {
                 ) {
                     currentPageUrl = url == null ? "" : url;
 
-                    if (
-                        probeActive
-                        && !WebViewFeature.isFeatureSupported(
-                            WebViewFeature.DOCUMENT_START_SCRIPT
-                        )
-                    ) {
-                        view.evaluateJavascript(
-                            probeScript,
-                            null
-                        );
+                    if (probeActive && probeScript != null && !probeScript.isEmpty()) {
+                        view.evaluateJavascript(probeScript, null);
                     }
+                }
+
+                @Override
+                public void onPageCommitVisible(
+                    WebView view,
+                    String url
+                ) {
+                    currentPageUrl = url == null ? "" : url;
+
+                    if (probeActive && probeScript != null && !probeScript.isEmpty()) {
+                        view.evaluateJavascript(probeScript, null);
+                    }
+                }
+
+                @Override
+                public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView view,
+                    WebResourceRequest request
+                ) {
+                    if (probeActive && request != null && request.getUrl() != null) {
+                        String u = request.getUrl().toString();
+                        String low = u.toLowerCase(Locale.US);
+
+                        if (
+                            low.contains("douyinvod")
+                            || low.contains("xhscdn")
+                            || low.contains("sns-video")
+                            || low.contains("/video/")
+                            || low.contains("/play/")
+                            || low.contains(".mp4")
+                        ) {
+                            String candidate = normalizeUrl(u);
+
+                            if (
+                                !candidate.isEmpty()
+                                && seenCandidates.add(candidate)
+                            ) {
+                                appendLog(
+                                    "NET "
+                                        + safeHostPath(candidate)
+                                );
+
+                                executor.execute(
+                                    () -> verifyCandidate(
+                                        candidate,
+                                        currentPageUrl
+                                    )
+                                );
+                            }
+                        }
+                    }
+
+                    return super.shouldInterceptRequest(
+                        view,
+                        request
+                    );
                 }
             }
         );
 
-        if (
-            WebViewFeature.isFeatureSupported(
-                WebViewFeature.DOCUMENT_START_SCRIPT
-            )
-        ) {
-            WebViewCompat.addDocumentStartJavaScript(
-                webView,
-                probeScript,
-                Collections.singleton("*")
-            );
-            appendLog(
-                "DocumentStart 注入：支持"
-            );
-        } else {
-            appendLog(
-                "DocumentStart 注入：当前 WebView 不支持，将回退 onPageStarted/onPageFinished"
-            );
-        }
+        appendLog("页面监听：已启用");
     }
 
     private void openLogin(String p) {
