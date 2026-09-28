@@ -1,4 +1,4 @@
-name: Build WangParser APK V7.0.3 Free Local
+name: Build WangParser APK V7.0.4 Free Local
 
 on:
   workflow_dispatch:
