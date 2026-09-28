@@ -9,54 +9,90 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
-import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
+import android.view.Gravity;
+import android.view.View;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONObject;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
 
-    private static final int REQ_STORAGE = 100;
-    private static final int REQ_SCREEN_CAPTURE = 2001;
-    private static final int REQ_AUDIO = 2002;
+    private static final int REQ_STORAGE = 7001;
 
     private LinearLayout root;
+    private EditText input;
+    private TextView status;
+    private TextView result;
+    private TextView logView;
     private WebView webView;
+    private LinearLayout webControls;
+    private Button downloadButton;
+    private ProgressBar progressBar;
 
-    private LinearLayout downloadPanel;
-    private TextView downloadText;
-    private ProgressBar downloadProgress;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService executor = Executors.newFixedThreadPool(3);
+    private final Set<String> seenCandidates = ConcurrentHashMap.newKeySet();
 
+    private volatile boolean probeActive = false;
+    private volatile boolean verified = false;
+    private volatile String platform = "";
+    private volatile String verifiedUrl = "";
+    private volatile String verifiedReferer = "";
+    private volatile String verifiedTitle = "";
+    private volatile String currentPageUrl = "";
+
+    private long activeDownloadId = -1L;
     private DownloadManager downloadManager;
-    private Handler handler;
+    private String probeScript = "";
 
-    private long currentDownloadId = -1L;
-    private long lastBytes = 0L;
-    private long lastSampleTime = 0L;
+    private static final Pattern FIRST_HTTP =
+        Pattern.compile("https?://[^\\s，。；;）),]+", Pattern.CASE_INSENSITIVE);
 
-    private String pendingRecordUrl = "";
+    private static final Pattern RAW_DIRECT =
+        Pattern.compile(
+            "(?i)[\"'](?:play_addr|playAddr|download_addr|downloadAddr|masterUrl|master_url|video_url|videoUrl|play_url|playUrl)[\"']\\s*:\\s*[\"']([^\"']+)[\"']"
+        );
+
+    private static final Pattern RAW_LIST =
+        Pattern.compile(
+            "(?i)[\"'](?:url_list|urlList|backupUrls|backup_urls)[\"']\\s*:\\s*\\[\\s*[\"']([^\"']+)[\"']"
+        );
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,21 +101,125 @@ public class MainActivity extends Activity {
         downloadManager =
             (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
 
-        handler = new Handler(Looper.getMainLooper());
+        probeScript = readAsset("probe.js");
 
-        buildLayout();
+        buildUi();
         configureWebView();
-
-        webView.loadUrl("file:///android_asset/index.html");
     }
 
-    private void buildLayout() {
+    private void buildUi() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF101317);
+        root.setBackgroundColor(Color.rgb(16, 19, 23));
+        root.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        TextView title = new TextView(this);
+        title.setText("王的解析 · 本地会话诊断 V9");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(24f);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        title.setPadding(0, 0, 0, dp(8));
+        root.addView(title);
+
+        TextView explain = new TextView(this);
+        explain.setText(
+            "目标：不播放视频。先在本 APP 的真实平台网页中手动登录一次；之后加载分享链接时，从页面自己的 fetch/XHR/SSR 状态中寻找媒体，再由 APP 验证真实视频文件头。"
+        );
+        explain.setTextColor(Color.rgb(180, 190, 200));
+        explain.setTextSize(14f);
+        explain.setPadding(0, 0, 0, dp(10));
+        root.addView(explain);
+
+        input = new EditText(this);
+        input.setHint("粘贴抖音/小红书分享链接或完整分享文案");
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(Color.rgb(120, 130, 140));
+        input.setBackgroundColor(Color.rgb(24, 29, 35));
+        input.setMinHeight(dp(95));
+        input.setGravity(Gravity.TOP | Gravity.START);
+        input.setPadding(dp(12), dp(12), dp(12), dp(12));
+        root.addView(
+            input,
+            new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(110)
+            )
+        );
+
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
+
+        Button paste = makeButton("粘贴");
+        Button loginDy = makeButton("登录抖音会话");
+        Button loginXhs = makeButton("登录小红书会话");
+
+        row1.addView(paste, weight());
+        row1.addView(loginDy, weight());
+        row1.addView(loginXhs, weight());
+        root.addView(row1);
+
+        Button diagnose = makeButton("开始诊断（不播放）");
+        diagnose.setTextSize(16f);
+        root.addView(
+            diagnose,
+            new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(52)
+            )
+        );
+
+        status = new TextView(this);
+        status.setText("状态：等待");
+        status.setTextColor(Color.rgb(220, 225, 230));
+        status.setTextSize(15f);
+        status.setPadding(0, dp(8), 0, dp(6));
+        root.addView(status);
+
+        result = new TextView(this);
+        result.setText("");
+        result.setTextColor(Color.rgb(125, 225, 175));
+        result.setTextSize(14f);
+        result.setPadding(0, 0, 0, dp(6));
+        root.addView(result);
+
+        downloadButton = makeButton("下载验证通过的视频");
+        downloadButton.setVisibility(View.GONE);
+        root.addView(
+            downloadButton,
+            new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(50)
+            )
+        );
+
+        progressBar =
+            new ProgressBar(
+                this,
+                null,
+                android.R.attr.progressBarStyleHorizontal
+            );
+        progressBar.setMax(100);
+        progressBar.setVisibility(View.GONE);
+        root.addView(
+            progressBar,
+            new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(12)
+            )
+        );
+
+        webControls = new LinearLayout(this);
+        webControls.setOrientation(LinearLayout.HORIZONTAL);
+        webControls.setVisibility(View.GONE);
+
+        Button doneSession = makeButton("完成登录 / 返回");
+        Button reload = makeButton("刷新网页");
+        webControls.addView(doneSession, weight());
+        webControls.addView(reload, weight());
+        root.addView(webControls);
 
         webView = new WebView(this);
-
+        webView.setVisibility(View.GONE);
         root.addView(
             webView,
             new LinearLayout.LayoutParams(
@@ -89,503 +229,683 @@ public class MainActivity extends Activity {
             )
         );
 
-        downloadPanel = new LinearLayout(this);
-        downloadPanel.setOrientation(LinearLayout.VERTICAL);
-        downloadPanel.setPadding(22, 12, 22, 16);
-        downloadPanel.setBackgroundColor(0xFF181D23);
-        downloadPanel.setVisibility(android.view.View.GONE);
+        TextView logTitle = new TextView(this);
+        logTitle.setText("诊断日志（不会显示 Cookie/密码）");
+        logTitle.setTextColor(Color.rgb(155, 165, 175));
+        logTitle.setTextSize(12f);
+        root.addView(logTitle);
 
-        downloadText = new TextView(this);
-        downloadText.setTextColor(0xFFF4F7FA);
-        downloadText.setTextSize(14f);
+        ScrollView logScroll = new ScrollView(this);
+        logView = new TextView(this);
+        logView.setTextColor(Color.rgb(170, 180, 190));
+        logView.setTextSize(11f);
+        logView.setText("尚无日志");
+        logScroll.addView(logView);
 
-        downloadProgress = new ProgressBar(
-            this,
-            null,
-            android.R.attr.progressBarStyleHorizontal
-        );
-        downloadProgress.setMax(100);
-
-        downloadPanel.addView(downloadText);
-
-        LinearLayout.LayoutParams p =
+        root.addView(
+            logScroll,
             new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                22
-            );
-        p.topMargin = 8;
-        downloadPanel.addView(downloadProgress, p);
-
-        root.addView(downloadPanel);
+                dp(155)
+            )
+        );
 
         setContentView(root);
+
+        paste.setOnClickListener(v -> pasteClipboard());
+        loginDy.setOnClickListener(v -> openLogin("douyin"));
+        loginXhs.setOnClickListener(v -> openLogin("xhs"));
+        diagnose.setOnClickListener(v -> startDiagnosis());
+        doneSession.setOnClickListener(v -> finishSessionView());
+        reload.setOnClickListener(v -> webView.reload());
+        downloadButton.setOnClickListener(v -> downloadVerified());
+    }
+
+    private LinearLayout.LayoutParams weight() {
+        LinearLayout.LayoutParams p =
+            new LinearLayout.LayoutParams(
+                0,
+                dp(48),
+                1f
+            );
+        p.setMargins(dp(2), dp(4), dp(2), dp(4));
+        return p;
+    }
+
+    private Button makeButton(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        return b;
     }
 
     private void configureWebView() {
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(true);
+        s.setAllowFileAccess(false);
         s.setAllowContentAccess(true);
+        s.setMediaPlaybackRequiresUserGesture(true);
+        s.setSupportMultipleWindows(false);
         s.setUserAgentString(
-            s.getUserAgentString() + " WangParser/8.0.0"
+            s.getUserAgentString() + " WangParserSessionDiag/9.0"
         );
 
-        webView.addJavascriptInterface(
-            new AndroidClipboard(),
-            "AndroidClipboard"
-        );
-
-        webView.addJavascriptInterface(
-            new AndroidDownloader(),
-            "AndroidDownloader"
-        );
-
-        webView.addJavascriptInterface(
-            new AndroidExternal(),
-            "AndroidExternal"
-        );
-
-        webView.addJavascriptInterface(
-            new AndroidScreenRecorder(),
-            "AndroidScreenRecorder"
-        );
-
-        webView.setWebChromeClient(new WebChromeClient());
-        webView.setWebViewClient(new WebViewClient());
-    }
-
-    public class AndroidClipboard {
-        @JavascriptInterface
-        public String getText() {
-            try {
-                ClipboardManager cm =
-                    (ClipboardManager)
-                        getSystemService(Context.CLIPBOARD_SERVICE);
-
-                if (cm == null || !cm.hasPrimaryClip()) {
-                    return "";
-                }
-
-                ClipData clip = cm.getPrimaryClip();
-
-                if (clip == null || clip.getItemCount() == 0) {
-                    return "";
-                }
-
-                CharSequence value =
-                    clip.getItemAt(0)
-                        .coerceToText(MainActivity.this);
-
-                return value == null ? "" : value.toString();
-
-            } catch (Exception e) {
-                return "";
-            }
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= 21) {
+            cm.setAcceptThirdPartyCookies(webView, true);
         }
-    }
 
-    public class AndroidExternal {
-        @JavascriptInterface
-        public void open(final String raw) {
-            runOnUiThread(() -> openExternal(raw));
-        }
-    }
+        webView.addJavascriptInterface(
+            new ProbeBridge(),
+            "AndroidProbe"
+        );
 
-    public class AndroidScreenRecorder {
-
-        @JavascriptInterface
-        public void start(final String rawUrl) {
-            runOnUiThread(() -> {
-                pendingRecordUrl =
-                    extractFirstHttpUrl(rawUrl);
-
-                if (pendingRecordUrl == null) {
-                    pendingRecordUrl = "";
-                }
-
-                if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                    && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                        != PackageManager.PERMISSION_GRANTED
+        webView.setWebViewClient(
+            new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(
+                    WebView view,
+                    WebResourceRequest request
                 ) {
-                    requestPermissions(
-                        new String[]{Manifest.permission.RECORD_AUDIO},
-                        REQ_AUDIO
+                    Uri uri = request.getUrl();
+                    String scheme = uri.getScheme();
+
+                    if (
+                        "http".equalsIgnoreCase(scheme)
+                        || "https".equalsIgnoreCase(scheme)
+                    ) {
+                        return false;
+                    }
+
+                    appendLog(
+                        "阻止外部 scheme: "
+                            + safeScheme(scheme)
                     );
-                    return;
+                    return true;
                 }
 
-                requestScreenCapture();
-            });
-        }
+                @Override
+                public void onPageStarted(
+                    WebView view,
+                    String url,
+                    android.graphics.Bitmap favicon
+                ) {
+                    currentPageUrl = url == null ? "" : url;
+                    appendLog(
+                        "PAGE " + redactUrl(currentPageUrl)
+                    );
 
-        @JavascriptInterface
-        public void stop() {
-            runOnUiThread(() -> {
-                if (!ScreenRecordService.isRunning()) {
-                    Toast.makeText(
-                        MainActivity.this,
-                        "当前没有正在进行的录屏。",
-                        Toast.LENGTH_SHORT
-                    ).show();
-                    return;
+                    // Fallback for WebView versions without document-start support.
+                    if (
+                        !WebViewFeature.isFeatureSupported(
+                            WebViewFeature.DOCUMENT_START_SCRIPT
+                        )
+                        && probeActive
+                    ) {
+                        view.evaluateJavascript(
+                            probeScript,
+                            null
+                        );
+                    }
                 }
 
-                Intent i =
-                    new Intent(
-                        MainActivity.this,
-                        ScreenRecordService.class
-                    );
-                i.setAction(ScreenRecordService.ACTION_STOP);
-                startService(i);
-            });
-        }
+                @Override
+                public void onPageFinished(
+                    WebView view,
+                    String url
+                ) {
+                    currentPageUrl = url == null ? "" : url;
 
-        @JavascriptInterface
-        public boolean isRecording() {
-            return ScreenRecordService.isRunning();
-        }
-    }
+                    if (
+                        probeActive
+                        && !WebViewFeature.isFeatureSupported(
+                            WebViewFeature.DOCUMENT_START_SCRIPT
+                        )
+                    ) {
+                        view.evaluateJavascript(
+                            probeScript,
+                            null
+                        );
+                    }
+                }
+            }
+        );
 
-    private void requestScreenCapture() {
-        MediaProjectionManager mpm =
-            (MediaProjectionManager)
-                getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-
-        if (mpm == null) {
-            Toast.makeText(
-                this,
-                "当前设备不支持系统录屏授权。",
-                Toast.LENGTH_LONG
-            ).show();
-            return;
-        }
-
-        try {
-            startActivityForResult(
-                mpm.createScreenCaptureIntent(),
-                REQ_SCREEN_CAPTURE
+        if (
+            WebViewFeature.isFeatureSupported(
+                WebViewFeature.DOCUMENT_START_SCRIPT
+            )
+        ) {
+            WebViewCompat.addDocumentStartJavaScript(
+                webView,
+                probeScript,
+                Collections.singleton("*")
             );
-        } catch (Exception e) {
+            appendLog(
+                "DocumentStart 注入：支持"
+            );
+        } else {
+            appendLog(
+                "DocumentStart 注入：当前 WebView 不支持，将回退 onPageStarted/onPageFinished"
+            );
+        }
+    }
+
+    private void openLogin(String p) {
+        probeActive = false;
+        platform = p;
+        verified = false;
+        verifiedUrl = "";
+        result.setText("");
+        downloadButton.setVisibility(View.GONE);
+
+        showWeb();
+
+        String url =
+            "douyin".equals(p)
+                ? "https://www.douyin.com/"
+                : "https://www.xiaohongshu.com/";
+
+        status.setText(
+            "状态：请直接在平台网页中手动登录。"
+                + "本 APP 不读取账号、密码或验证码；登录完成后点“完成登录 / 返回”。"
+        );
+
+        webView.loadUrl(url);
+    }
+
+    private void finishSessionView() {
+        CookieManager.getInstance().flush();
+        probeActive = false;
+        hideWeb();
+        status.setText(
+            "状态：会话已保留。现在粘贴分享链接，点“开始诊断（不播放）”。"
+        );
+    }
+
+    private void startDiagnosis() {
+        String raw = input.getText().toString().trim();
+        String url = firstUrl(raw);
+
+        if (url.isEmpty()) {
             Toast.makeText(
                 this,
-                "无法启动系统录屏授权：" + e.getMessage(),
+                "没有识别到链接。",
                 Toast.LENGTH_LONG
             ).show();
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(
-        int requestCode,
-        String[] permissions,
-        int[] grantResults
-    ) {
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            grantResults
-        );
-
-        if (requestCode == REQ_AUDIO) {
-            // Even if microphone permission is denied, screen video can still be recorded.
-            requestScreenCapture();
-        }
-    }
-
-    @Override
-    protected void onActivityResult(
-        int requestCode,
-        int resultCode,
-        Intent data
-    ) {
-        super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-        );
-
-        if (requestCode != REQ_SCREEN_CAPTURE) {
             return;
         }
 
-        if (resultCode != RESULT_OK || data == null) {
+        String low = url.toLowerCase(Locale.US);
+
+        if (
+            low.contains("douyin.com")
+            || low.contains("iesdouyin.com")
+        ) {
+            platform = "douyin";
+        } else if (
+            low.contains("xiaohongshu.com")
+            || low.contains("xhslink.")
+        ) {
+            platform = "xhs";
+        } else {
             Toast.makeText(
                 this,
-                "你取消了系统录屏授权。",
-                Toast.LENGTH_SHORT
+                "这个诊断版只测试抖音和小红书。",
+                Toast.LENGTH_LONG
             ).show();
             return;
         }
 
-        boolean useMic =
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-            || checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED;
+        seenCandidates.clear();
+        verified = false;
+        verifiedUrl = "";
+        verifiedReferer = "";
+        verifiedTitle = "";
+        result.setText("");
+        downloadButton.setVisibility(View.GONE);
+        progressBar.setVisibility(View.GONE);
+        logView.setText("");
 
-        Intent service =
-            new Intent(this, ScreenRecordService.class);
+        probeActive = true;
 
-        service.setAction(ScreenRecordService.ACTION_START);
-        service.putExtra(
-            ScreenRecordService.EXTRA_RESULT_CODE,
-            resultCode
-        );
-        service.putExtra(
-            ScreenRecordService.EXTRA_RESULT_DATA,
-            data
-        );
-        service.putExtra(
-            ScreenRecordService.EXTRA_USE_MIC,
-            useMic
+        status.setText(
+            "状态：正在加载真实"
+                + ("douyin".equals(platform) ? "抖音" : "小红书")
+                + "网页并监听页面自己的数据请求；不会自动播放视频。"
         );
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(service);
-        } else {
-            startService(service);
-        }
+        appendLog(
+            "START " + platform + " " + redactUrl(url)
+        );
 
-        Toast.makeText(
-            this,
-            useMic
-                ? "录屏已开始。麦克风已启用；它录的是环境/扬声器声音，不代表平台内部音频。"
-                : "录屏已开始。当前只录画面。",
-            Toast.LENGTH_LONG
-        ).show();
+        showWeb();
+        webView.loadUrl(url);
 
-        handler.postDelayed(
+        main.postDelayed(
             () -> {
                 if (
-                    pendingRecordUrl != null
-                    && !pendingRecordUrl.isEmpty()
+                    probeActive
+                    && !verified
                 ) {
-                    openExternal(pendingRecordUrl);
+                    status.setText(
+                        "状态：20 秒内没有捕获到验证通过的视频。"
+                        + "如果页面显示未登录，请先完成对应平台登录；"
+                        + "如果已经登录，把日志和页面截图发回来。"
+                    );
+                    appendLog(
+                        "TIMEOUT no verified video"
+                    );
                 }
             },
-            900
+            20000
         );
     }
 
-    private void openExternal(String raw) {
-        String url = extractFirstHttpUrl(raw);
+    private void showWeb() {
+        webControls.setVisibility(View.VISIBLE);
+        webView.setVisibility(View.VISIBLE);
 
-        if (url == null) {
-            Toast.makeText(
-                this,
-                "没有识别到可打开的链接。",
-                Toast.LENGTH_LONG
-            ).show();
-            return;
-        }
+        LinearLayout.LayoutParams p =
+            (LinearLayout.LayoutParams)
+                webView.getLayoutParams();
 
-        try {
-            Intent i =
-                new Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(url)
-                );
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(i);
-
-        } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "无法打开链接：" + e.getMessage(),
-                Toast.LENGTH_LONG
-            ).show();
-        }
+        p.height = 0;
+        p.weight = 1f;
+        webView.setLayoutParams(p);
     }
 
-    public class AndroidDownloader {
+    private void hideWeb() {
+        webControls.setVisibility(View.GONE);
+        webView.setVisibility(View.GONE);
+    }
+
+    public class ProbeBridge {
 
         @JavascriptInterface
-        public void download(
-            final String url,
-            final String filename,
-            final String referer
+        public void onCandidate(
+            String url,
+            String path,
+            String kind,
+            String source
         ) {
-            runOnUiThread(
+            if (!probeActive || verified) {
+                return;
+            }
+
+            if (
+                url == null
+                || !url.startsWith("http")
+            ) {
+                return;
+            }
+
+            if (
+                "audio".equalsIgnoreCase(kind)
+            ) {
+                return;
+            }
+
+            String normalized =
+                normalizeUrl(url);
+
+            if (
+                normalized.isEmpty()
+                || !seenCandidates.add(normalized)
+            ) {
+                return;
+            }
+
+            appendLog(
+                "CAND "
+                    + safeHostPath(normalized)
+                    + "  ← "
+                    + shorten(path, 90)
+            );
+
+            executor.execute(
                 () ->
-                    validateBeforeDownload(
-                        url,
-                        filename,
-                        referer
+                    verifyCandidate(
+                        normalized,
+                        source
                     )
             );
         }
-    }
 
-    private interface BoolCallback {
-        void onResult(boolean value);
-    }
+        @JavascriptInterface
+        public void onRaw(
+            String source,
+            String raw
+        ) {
+            if (
+                !probeActive
+                || verified
+                || raw == null
+                || raw.isEmpty()
+            ) {
+                return;
+            }
 
-    private void validateBeforeDownload(
-        String url,
-        String filename,
-        String referer
-    ) {
-        String lower =
-            filename == null
-                ? ""
-                : filename.toLowerCase(Locale.US);
-
-        boolean isVideo =
-            lower.endsWith(".mp4")
-            || lower.endsWith(".webm")
-            || lower.endsWith(".mov")
-            || lower.endsWith(".mkv");
-
-        if (!isVideo) {
-            startDownload(url, filename, referer);
-            return;
+            scanRaw(
+                source,
+                raw
+            );
         }
 
-        validateVideoAsync(
-            url,
-            referer,
-            ok -> {
-                if (!ok) {
-                    Toast.makeText(
-                        MainActivity.this,
-                        "视频地址真实性校验失败，已阻止保存。不会生成 0 秒白屏文件。",
-                        Toast.LENGTH_LONG
-                    ).show();
-                    return;
+        @JavascriptInterface
+        public void onTitle(
+            String title,
+            String pageUrl
+        ) {
+            if (
+                title != null
+                && !title.trim().isEmpty()
+            ) {
+                verifiedTitle =
+                    title.trim();
+            }
+
+            if (
+                pageUrl != null
+                && !pageUrl.isEmpty()
+            ) {
+                currentPageUrl = pageUrl;
+            }
+        }
+
+        @JavascriptInterface
+        public void onEvent(
+            String type,
+            String source,
+            String detail
+        ) {
+            if (!probeActive) {
+                return;
+            }
+
+            if (
+                "probe".equals(type)
+            ) {
+                appendLog(
+                    "PROBE document-start"
+                );
+            }
+        }
+    }
+
+    private void scanRaw(
+        String source,
+        String raw
+    ) {
+        executor.execute(
+            () -> {
+                Matcher m1 =
+                    RAW_DIRECT.matcher(raw);
+
+                int count = 0;
+
+                while (
+                    m1.find()
+                    && count++ < 40
+                ) {
+                    submitRawCandidate(
+                        m1.group(1),
+                        source,
+                        "raw-direct"
+                    );
                 }
 
-                startDownload(
-                    url,
-                    filename,
-                    referer
-                );
+                Matcher m2 =
+                    RAW_LIST.matcher(raw);
+
+                count = 0;
+
+                while (
+                    m2.find()
+                    && count++ < 40
+                ) {
+                    submitRawCandidate(
+                        m2.group(1),
+                        source,
+                        "raw-list"
+                    );
+                }
             }
         );
     }
 
-    private void validateVideoAsync(
-        final String url,
-        final String referer,
-        final BoolCallback callback
+    private void submitRawCandidate(
+        String raw,
+        String source,
+        String path
     ) {
-        new Thread(
-            () -> {
-                boolean valid = false;
-                HttpURLConnection c = null;
+        String u =
+            normalizeUrl(raw);
 
-                try {
-                    c =
-                        (HttpURLConnection)
-                            new URL(url)
-                                .openConnection();
+        if (
+            u.isEmpty()
+            || !u.startsWith("http")
+            || !seenCandidates.add(u)
+        ) {
+            return;
+        }
 
-                    c.setInstanceFollowRedirects(true);
-                    c.setConnectTimeout(7000);
-                    c.setReadTimeout(7000);
+        appendLog(
+            "RAW "
+                + safeHostPath(u)
+        );
 
-                    c.setRequestProperty(
-                        "User-Agent",
-                        webView.getSettings()
-                            .getUserAgentString()
-                    );
-
-                    if (
-                        referer != null
-                        && !referer.trim().isEmpty()
-                    ) {
-                        c.setRequestProperty(
-                            "Referer",
-                            referer
-                        );
-                    }
-
-                    c.setRequestProperty(
-                        "Range",
-                        "bytes=0-4095"
-                    );
-
-                    int status =
-                        c.getResponseCode();
-
-                    String type =
-                        c.getContentType();
-
-                    InputStream in =
-                        status >= 200 && status < 400
-                            ? c.getInputStream()
-                            : null;
-
-                    byte[] head = new byte[256];
-
-                    int n =
-                        in != null
-                            ? in.read(head)
-                            : -1;
-
-                    if (in != null) {
-                        in.close();
-                    }
-
-                    String lowType =
-                        type == null
-                            ? ""
-                            : type.toLowerCase(Locale.US);
-
-                    String prefix =
-                        n > 0
-                            ? new String(
-                                head,
-                                0,
-                                n,
-                                StandardCharsets.ISO_8859_1
-                            )
-                            : "";
-
-                    boolean html =
-                        lowType.contains("text/html")
-                        || prefix
-                            .toLowerCase(Locale.US)
-                            .contains("<html");
-
-                    boolean video =
-                        lowType.startsWith("video/")
-                        || prefix.contains("ftyp")
-                        || prefix.contains("webm");
-
-                    valid =
-                        (
-                            status == 200
-                            || status == 206
-                        )
-                        && !html
-                        && video;
-
-                } catch (Exception ignored) {
-                    valid = false;
-
-                } finally {
-                    if (c != null) {
-                        c.disconnect();
-                    }
-                }
-
-                final boolean result = valid;
-
-                handler.post(
-                    () -> callback.onResult(result)
-                );
-            }
-        ).start();
+        verifyCandidate(
+            u,
+            source
+        );
     }
 
-    private void startDownload(
-        String url,
-        String filename,
-        String referer
+    private void verifyCandidate(
+        String candidate,
+        String source
     ) {
+        if (verified) {
+            return;
+        }
+
+        HttpURLConnection c = null;
+
+        try {
+            c =
+                (HttpURLConnection)
+                    new URL(candidate)
+                        .openConnection();
+
+            c.setInstanceFollowRedirects(true);
+            c.setConnectTimeout(7000);
+            c.setReadTimeout(7000);
+
+            c.setRequestProperty(
+                "User-Agent",
+                webView.getSettings()
+                    .getUserAgentString()
+            );
+
+            c.setRequestProperty(
+                "Accept",
+                "*/*"
+            );
+
+            c.setRequestProperty(
+                "Range",
+                "bytes=0-8191"
+            );
+
+            String referer =
+                firstNonEmpty(
+                    source,
+                    currentPageUrl
+                );
+
+            if (
+                referer != null
+                && referer.startsWith("http")
+            ) {
+                c.setRequestProperty(
+                    "Referer",
+                    referer
+                );
+            }
+
+            String cookie =
+                CookieManager.getInstance()
+                    .getCookie(candidate);
+
+            if (
+                cookie != null
+                && !cookie.isEmpty()
+            ) {
+                c.setRequestProperty(
+                    "Cookie",
+                    cookie
+                );
+            }
+
+            int statusCode =
+                c.getResponseCode();
+
+            String type =
+                c.getContentType();
+
+            InputStream in =
+                statusCode >= 200
+                    && statusCode < 400
+                    ? c.getInputStream()
+                    : c.getErrorStream();
+
+            byte[] head =
+                readHead(in, 8192);
+
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (Exception ignored) {
+                }
+            }
+
+            String ascii =
+                new String(
+                    head,
+                    StandardCharsets.ISO_8859_1
+                );
+
+            String lowType =
+                type == null
+                    ? ""
+                    : type.toLowerCase(Locale.US);
+
+            boolean html =
+                lowType.contains("text/html")
+                || ascii
+                    .toLowerCase(Locale.US)
+                    .contains("<html");
+
+            boolean video =
+                lowType.startsWith("video/")
+                || ascii.contains("ftyp")
+                || ascii
+                    .toLowerCase(Locale.US)
+                    .contains("webm")
+                || ascii.contains("moov")
+                || ascii.contains("mdat");
+
+            appendLog(
+                "VERIFY "
+                    + statusCode
+                    + " "
+                    + safeType(type)
+                    + " "
+                    + safeHostPath(candidate)
+                    + (video && !html ? " ✓" : " ✗")
+            );
+
+            if (
+                !verified
+                && statusCode >= 200
+                && statusCode < 400
+                && !html
+                && video
+            ) {
+                verified = true;
+                probeActive = false;
+                verifiedUrl = candidate;
+                verifiedReferer =
+                    referer == null ? "" : referer;
+
+                main.post(
+                    () -> {
+                        status.setText(
+                            "状态：✅ 捕获并验证到真实视频。无需播放。"
+                        );
+
+                        result.setText(
+                            "平台："
+                                + platform
+                                + "\n标题："
+                                + (
+                                    verifiedTitle == null
+                                        || verifiedTitle.isEmpty()
+                                        ? "未读取"
+                                        : verifiedTitle
+                                )
+                                + "\n媒体："
+                                + safeHostPath(
+                                    verifiedUrl
+                                )
+                                + "\n校验：HTTP "
+                                + statusCode
+                                + " / "
+                                + safeType(type)
+                        );
+
+                        downloadButton.setVisibility(
+                            View.VISIBLE
+                        );
+
+                        main.postDelayed(
+                            this::hideWeb,
+                            700
+                        );
+                    }
+                );
+            }
+
+        } catch (Exception e) {
+            appendLog(
+                "VERIFY ERR "
+                    + safeHostPath(candidate)
+                    + " "
+                    + shorten(
+                        e.getClass().getSimpleName(),
+                        40
+                    )
+            );
+
+        } finally {
+            if (c != null) {
+                c.disconnect();
+            }
+        }
+    }
+
+    private void downloadVerified() {
         if (
-            Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+            verifiedUrl == null
+            || verifiedUrl.isEmpty()
+        ) {
+            return;
+        }
+
+        if (
+            Build.VERSION.SDK_INT <= 28
             && checkSelfPermission(
                 Manifest.permission.WRITE_EXTERNAL_STORAGE
             )
@@ -600,19 +920,25 @@ public class MainActivity extends Activity {
 
             Toast.makeText(
                 this,
-                "请允许存储权限后重新点击下载。",
+                "允许存储权限后再点一次下载。",
                 Toast.LENGTH_LONG
             ).show();
             return;
         }
 
         try {
-            filename = sanitize(filename);
+            String filename =
+                "WangParser_Diag_"
+                    + System.currentTimeMillis()
+                    + ".mp4";
 
             DownloadManager.Request req =
                 new DownloadManager.Request(
-                    Uri.parse(url)
+                    Uri.parse(verifiedUrl)
                 );
+
+            req.setTitle(filename);
+            req.setMimeType("video/mp4");
 
             req.setNotificationVisibility(
                 DownloadManager.Request
@@ -626,65 +952,65 @@ public class MainActivity extends Activity {
             );
 
             if (
-                referer != null
-                && !referer.trim().isEmpty()
+                verifiedReferer != null
+                && !verifiedReferer.isEmpty()
             ) {
                 req.addRequestHeader(
                     "Referer",
-                    referer
+                    verifiedReferer
                 );
             }
 
-            req.setMimeType(
-                guessMimeType(filename)
-            );
+            String cookie =
+                CookieManager.getInstance()
+                    .getCookie(verifiedUrl);
 
-            req.setTitle(filename);
+            if (
+                cookie != null
+                && !cookie.isEmpty()
+            ) {
+                req.addRequestHeader(
+                    "Cookie",
+                    cookie
+                );
+            }
 
             req.setDestinationInExternalPublicDir(
-                getTargetDirectory(filename),
-                "WangParser/" + filename
+                Environment.DIRECTORY_MOVIES,
+                "WangParser/Diagnostics/"
+                    + filename
             );
 
-            currentDownloadId =
+            activeDownloadId =
                 downloadManager.enqueue(req);
 
-            lastBytes = 0L;
-            lastSampleTime =
-                System.currentTimeMillis();
+            progressBar.setVisibility(
+                View.VISIBLE
+            );
+            progressBar.setProgress(0);
 
-            downloadPanel.setVisibility(
-                android.view.View.VISIBLE
+            status.setText(
+                "状态：正在下载验证视频…"
             );
 
-            downloadProgress.setIndeterminate(false);
-            downloadProgress.setProgress(0);
-
-            downloadText.setText(
-                "正在下载：" + filename + "  0%"
-            );
-
-            poll(
-                currentDownloadId,
-                filename
+            pollDownload(
+                activeDownloadId
             );
 
         } catch (Exception e) {
-            Toast.makeText(
-                this,
-                "下载启动失败：" + e.getMessage(),
-                Toast.LENGTH_LONG
-            ).show();
+            status.setText(
+                "状态：下载启动失败："
+                    + e.getMessage()
+            );
         }
     }
 
-    private void poll(
-        final long id,
-        final String filename
+    private void pollDownload(
+        long id
     ) {
-        handler.postDelayed(
+        main.postDelayed(
             () -> {
-                if (id != currentDownloadId) {
+                if (id != activeDownloadId) {
                     return;
                 }
 
@@ -695,17 +1021,18 @@ public class MainActivity extends Activity {
                 Cursor c = null;
 
                 try {
-                    c = downloadManager.query(q);
+                    c =
+                        downloadManager.query(q);
 
                     if (
                         c == null
                         || !c.moveToFirst()
                     ) {
-                        poll(id, filename);
+                        pollDownload(id);
                         return;
                     }
 
-                    int status =
+                    int state =
                         c.getInt(
                             c.getColumnIndexOrThrow(
                                 DownloadManager.COLUMN_STATUS
@@ -715,122 +1042,60 @@ public class MainActivity extends Activity {
                     long done =
                         c.getLong(
                             c.getColumnIndexOrThrow(
-                                DownloadManager
-                                    .COLUMN_BYTES_DOWNLOADED_SO_FAR
+                                DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR
                             )
                         );
 
                     long total =
                         c.getLong(
                             c.getColumnIndexOrThrow(
-                                DownloadManager
-                                    .COLUMN_TOTAL_SIZE_BYTES
+                                DownloadManager.COLUMN_TOTAL_SIZE_BYTES
                             )
                         );
 
-                    if (
-                        status
-                            == DownloadManager.STATUS_SUCCESSFUL
-                    ) {
-                        downloadProgress.setIndeterminate(false);
-                        downloadProgress.setProgress(100);
-
-                        downloadText.setText(
-                            "下载完成：" + filename + "  100%"
-                        );
-
-                        Toast.makeText(
-                            this,
-                            "下载完成。",
-                            Toast.LENGTH_LONG
-                        ).show();
-
-                        currentDownloadId = -1L;
-                        return;
-                    }
-
-                    if (
-                        status
-                            == DownloadManager.STATUS_FAILED
-                    ) {
-                        downloadText.setText(
-                            "下载失败：" + filename
-                        );
-                        currentDownloadId = -1L;
-                        return;
-                    }
-
-                    long now =
-                        System.currentTimeMillis();
-
-                    long deltaMs =
-                        Math.max(
-                            1L,
-                            now - lastSampleTime
-                        );
-
-                    long deltaBytes =
-                        Math.max(
-                            0L,
-                            done - lastBytes
-                        );
-
-                    double speedMB =
-                        deltaBytes
-                            / 1024.0
-                            / 1024.0
-                            / (deltaMs / 1000.0);
-
-                    lastBytes = done;
-                    lastSampleTime = now;
-
-                    double doneMB =
-                        done / 1024.0 / 1024.0;
-
                     if (total > 0) {
-                        int percent =
+                        int pct =
                             (int) (
                                 done * 100L / total
                             );
+                        progressBar.setProgress(pct);
 
-                        double totalMB =
-                            total / 1024.0 / 1024.0;
-
-                        downloadProgress
-                            .setIndeterminate(false);
-                        downloadProgress
-                            .setProgress(percent);
-
-                        downloadText.setText(
+                        status.setText(
                             String.format(
                                 Locale.US,
-                                "正在下载：%s  %d%%  %.1f / %.1f MB  %.2f MB/s",
-                                filename,
-                                percent,
-                                doneMB,
-                                totalMB,
-                                speedMB
-                            )
-                        );
-
-                    } else {
-                        downloadProgress.setIndeterminate(true);
-
-                        downloadText.setText(
-                            String.format(
-                                Locale.US,
-                                "正在下载：%s  %.1f MB  %.2f MB/s",
-                                filename,
-                                doneMB,
-                                speedMB
+                                "状态：下载中 %d%%  %.1f / %.1f MB",
+                                pct,
+                                done / 1048576.0,
+                                total / 1048576.0
                             )
                         );
                     }
 
-                    poll(id, filename);
+                    if (
+                        state
+                            == DownloadManager.STATUS_SUCCESSFUL
+                    ) {
+                        activeDownloadId = -1L;
+                        progressBar.setProgress(100);
+                        verifyDownloadedFile(id);
+                        return;
+                    }
+
+                    if (
+                        state
+                            == DownloadManager.STATUS_FAILED
+                    ) {
+                        activeDownloadId = -1L;
+                        status.setText(
+                            "状态：下载失败。"
+                        );
+                        return;
+                    }
+
+                    pollDownload(id);
 
                 } catch (Exception e) {
-                    poll(id, filename);
+                    pollDownload(id);
 
                 } finally {
                     if (c != null) {
@@ -838,132 +1103,374 @@ public class MainActivity extends Activity {
                     }
                 }
             },
-            250
+            300
         );
     }
 
-    private String sanitize(String s) {
-        if (s == null || s.trim().isEmpty()) {
-            return "download";
-        }
+    private void verifyDownloadedFile(
+        long id
+    ) {
+        executor.execute(
+            () -> {
+                long duration = 0L;
+                Uri uri =
+                    downloadManager
+                        .getUriForDownloadedFile(id);
 
-        return s.replaceAll(
-            "[\\\\/:*?\"<>|]",
-            "_"
+                try {
+                    if (uri != null) {
+                        MediaMetadataRetriever mmr =
+                            new MediaMetadataRetriever();
+
+                        mmr.setDataSource(
+                            MainActivity.this,
+                            uri
+                        );
+
+                        String d =
+                            mmr.extractMetadata(
+                                MediaMetadataRetriever
+                                    .METADATA_KEY_DURATION
+                            );
+
+                        if (d != null) {
+                            duration =
+                                Long.parseLong(d);
+                        }
+
+                        mmr.release();
+                    }
+                } catch (Exception ignored) {
+                }
+
+                final long finalDuration =
+                    duration;
+
+                main.post(
+                    () -> {
+                        if (finalDuration > 0) {
+                            status.setText(
+                                "状态：✅ 下载完成并通过本地时长校验："
+                                    + String.format(
+                                        Locale.US,
+                                        "%.1f 秒",
+                                        finalDuration
+                                            / 1000.0
+                                    )
+                                    + "。文件在 Movies/WangParser/Diagnostics。"
+                            );
+                        } else {
+                            try {
+                                downloadManager.remove(id);
+                            } catch (Exception ignored) {
+                            }
+
+                            status.setText(
+                                "状态：❌ 下载完成但时长校验失败，已删除测试文件。"
+                            );
+                        }
+                    }
+                );
+            }
         );
     }
 
-    private String guessMimeType(
-        String filename
+    private byte[] readHead(
+        InputStream in,
+        int max
     ) {
-        String lower =
-            filename == null
-                ? ""
-                : filename.toLowerCase(Locale.US);
-
-        if (lower.endsWith(".mp4"))
-            return "video/mp4";
-        if (lower.endsWith(".webm"))
-            return "video/webm";
-        if (lower.endsWith(".mkv"))
-            return "video/x-matroska";
-        if (lower.endsWith(".mov"))
-            return "video/quicktime";
-        if (lower.endsWith(".mp3"))
-            return "audio/mpeg";
-        if (lower.endsWith(".m4a"))
-            return "audio/mp4";
-        if (lower.endsWith(".aac"))
-            return "audio/aac";
-        if (lower.endsWith(".wav"))
-            return "audio/wav";
-        if (lower.endsWith(".ogg"))
-            return "audio/ogg";
-
-        return "application/octet-stream";
-    }
-
-    private String getTargetDirectory(
-        String filename
-    ) {
-        String lower =
-            filename == null
-                ? ""
-                : filename.toLowerCase(Locale.US);
-
-        if (
-            lower.endsWith(".mp4")
-            || lower.endsWith(".webm")
-            || lower.endsWith(".mkv")
-            || lower.endsWith(".mov")
-        ) {
-            return Environment.DIRECTORY_MOVIES;
+        if (in == null) {
+            return new byte[0];
         }
 
-        if (
-            lower.endsWith(".mp3")
-            || lower.endsWith(".m4a")
-            || lower.endsWith(".aac")
-            || lower.endsWith(".wav")
-            || lower.endsWith(".ogg")
-        ) {
-            return Environment.DIRECTORY_MUSIC;
-        }
+        try {
+            ByteArrayOutputStream out =
+                new ByteArrayOutputStream();
 
-        return Environment.DIRECTORY_DOWNLOADS;
-    }
+            byte[] buf =
+                new byte[2048];
 
-    private String extractFirstHttpUrl(
-        String text
-    ) {
-        if (text == null) {
-            return null;
-        }
+            int remain = max;
 
-        int h1 = text.indexOf("http://");
-        int h2 = text.indexOf("https://");
+            while (remain > 0) {
+                int n =
+                    in.read(
+                        buf,
+                        0,
+                        Math.min(
+                            buf.length,
+                            remain
+                        )
+                    );
 
-        int start;
+                if (n <= 0) {
+                    break;
+                }
 
-        if (h1 < 0) {
-            start = h2;
-        } else if (h2 < 0) {
-            start = h1;
-        } else {
-            start = Math.min(h1, h2);
-        }
-
-        if (start < 0) {
-            return null;
-        }
-
-        int end = start;
-
-        while (end < text.length()) {
-            char c = text.charAt(end);
-
-            if (
-                Character.isWhitespace(c)
-                || c == '，'
-                || c == '。'
-                || c == ','
-                || c == ';'
-                || c == '；'
-                || c == ')'
-                || c == '）'
-            ) {
-                break;
+                out.write(buf, 0, n);
+                remain -= n;
             }
 
-            end++;
+            return out.toByteArray();
+
+        } catch (Exception e) {
+            return new byte[0];
+        }
+    }
+
+    private void pasteClipboard() {
+        try {
+            ClipboardManager cm =
+                (ClipboardManager)
+                    getSystemService(
+                        Context.CLIPBOARD_SERVICE
+                    );
+
+            if (
+                cm != null
+                && cm.hasPrimaryClip()
+            ) {
+                ClipData d =
+                    cm.getPrimaryClip();
+
+                if (
+                    d != null
+                    && d.getItemCount() > 0
+                ) {
+                    CharSequence t =
+                        d.getItemAt(0)
+                            .coerceToText(this);
+
+                    input.setText(
+                        t == null
+                            ? ""
+                            : t.toString()
+                    );
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String firstUrl(String text) {
+        if (text == null) {
+            return "";
         }
 
-        String u =
-            text.substring(start, end);
+        Matcher m =
+            FIRST_HTTP.matcher(text);
 
-        return u.replaceAll(
-            "[，。,.；;）)]+$",
-            ""
+        if (!m.find()) {
+            return "";
+        }
+
+        return m.group()
+            .replaceAll(
+                "[，。,.；;）)]+$",
+                ""
+            );
+    }
+
+    private String normalizeUrl(
+        String raw
+    ) {
+        if (raw == null) {
+            return "";
+        }
+
+        String s =
+            raw.trim()
+                .replace("\\/", "/")
+                .replace("\\u002F", "/")
+                .replace("\\u002f", "/")
+                .replace("\\u0026", "&")
+                .replace("\\u003D", "=")
+                .replace("\\u003d", "=")
+                .replace("&amp;", "&");
+
+        try {
+            if (
+                s.contains("%2F")
+                || s.contains("%3A")
+                || s.contains("%3F")
+            ) {
+                String decoded =
+                    URLDecoder.decode(
+                        s,
+                        "UTF-8"
+                    );
+
+                if (
+                    decoded.startsWith("http")
+                ) {
+                    s = decoded;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        return s;
+    }
+
+    private String safeHostPath(String raw) {
+        try {
+            Uri u = Uri.parse(raw);
+            String host =
+                u.getHost() == null
+                    ? ""
+                    : u.getHost();
+
+            String path =
+                u.getPath() == null
+                    ? ""
+                    : u.getPath();
+
+            return shorten(
+                host + path,
+                120
+            );
+        } catch (Exception e) {
+            return shorten(raw, 120);
+        }
+    }
+
+    private String redactUrl(String raw) {
+        try {
+            Uri u = Uri.parse(raw);
+            return safeHostPath(raw);
+        } catch (Exception e) {
+            return shorten(raw, 100);
+        }
+    }
+
+    private String safeScheme(String s) {
+        return s == null ? "" : s;
+    }
+
+    private String safeType(String s) {
+        return s == null || s.isEmpty()
+            ? "(no content-type)"
+            : s;
+    }
+
+    private String shorten(
+        String s,
+        int max
+    ) {
+        if (s == null) {
+            return "";
+        }
+
+        return s.length() <= max
+            ? s
+            : s.substring(0, max) + "…";
+    }
+
+    private String firstNonEmpty(
+        String a,
+        String b
+    ) {
+        if (
+            a != null
+            && a.startsWith("http")
+        ) {
+            return a;
+        }
+
+        return b;
+    }
+
+    private String readAsset(
+        String name
+    ) {
+        try {
+            InputStream in =
+                getAssets().open(name);
+
+            ByteArrayOutputStream out =
+                new ByteArrayOutputStream();
+
+            byte[] buf =
+                new byte[4096];
+
+            int n;
+
+            while (
+                (n = in.read(buf)) > 0
+            ) {
+                out.write(buf, 0, n);
+            }
+
+            in.close();
+
+            return out.toString(
+                StandardCharsets.UTF_8.name()
+            );
+
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void appendLog(
+        String msg
+    ) {
+        main.post(
+            () -> {
+                String old =
+                    logView.getText()
+                        .toString();
+
+                if (
+                    old.equals("尚无日志")
+                ) {
+                    old = "";
+                }
+
+                String next =
+                    old
+                        + (
+                            old.isEmpty()
+                                ? ""
+                                : "\n"
+                        )
+                        + msg;
+
+                if (
+                    next.length() > 12000
+                ) {
+                    next =
+                        next.substring(
+                            next.length()
+                                - 12000
+                        );
+                }
+
+                logView.setText(next);
+            }
         );
+    }
+
+    private int dp(int value) {
+        return (int) (
+            value
+                * getResources()
+                    .getDisplayMetrics()
+                    .density
+                + 0.5f
+        );
+    }
+
+    @Override
+    protected void onDestroy() {
+        probeActive = false;
+
+        try {
+            webView.destroy();
+        } catch (Exception ignored) {
+        }
+
+        executor.shutdownNow();
+        super.onDestroy();
     }
 }
